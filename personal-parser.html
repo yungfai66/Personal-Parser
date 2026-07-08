@@ -1,0 +1,3409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Parser</title>
+<!-- PDF.js 2.16: load both lib + worker as scripts so fake-worker finds WorkerMessageHandler -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Tesseract.js for OCR on image PDFs -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,300;9..144,700;9..144,900&display=swap');
+:root {
+  --ink:#1a1a2e; --paper:#f9f9f9; --cream:#f2f2f2;
+  --gold:#b8932a; --gold-l:#d4aa44;
+  --red:#c0392b; --green:#2d6a4f; --muted:#888;
+  --border:#e0e0e0; --shadow:rgba(0,0,0,0.05);
+  --blue:#1a6fa8; --blue-l:#e8f3fb;
+  --mono:'IBM Plex Mono',monospace; --serif:'Fraunces',Georgia,serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--paper);color:var(--ink);font-family:var(--serif);min-height:100vh;padding:20px 7px 24px;}
+.container{max-width:1240px;margin:0 auto;}
+
+/* Two-column layout: descriptive content in the sidebar, controls in main-col */
+.page-layout{display:grid;grid-template-columns:1fr;grid-template-areas:"main" "sidebar";gap:20px;}
+.main-col{grid-area:main;min-width:0;}
+.sidebar{grid-area:sidebar;min-width:0;overflow:hidden;}
+.resize-handle{display:none;}
+@media(min-width:900px){
+  /* min-height fills the viewport (minus body's own padding) so the resize
+     handle reaches the bottom of the page even when content is short, rather
+     than stopping wherever the shorter column's content happens to end. */
+  .page-layout{grid-template-columns:var(--sidebar-w,210px) 14px 1fr;grid-template-areas:"sidebar handle main";gap:0;align-items:stretch;transition:grid-template-columns .18s ease;min-height:calc(100vh - 44px);}
+  .page-layout.no-anim{transition:none;}
+  .resize-handle{display:flex;grid-area:handle;position:relative;align-items:center;justify-content:center;cursor:col-resize;}
+  .resize-handle::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--border);transform:translateX(-50%);}
+  .resize-handle:hover::before{background:var(--gold);}
+  .collapse-toggle{position:relative;z-index:1;width:14px;height:26px;border-radius:7px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:9px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;}
+  .collapse-toggle:hover{border-color:var(--gold);color:var(--ink);}
+}
+/* Mode title (e.g. "Electricity & Water Bill Parser") must stay on one row —
+   fitPageTitle() shrinks its font-size in JS as the resizable sidebar narrows. */
+.sidebar h1{font-size:22px;white-space:nowrap;overflow:hidden;}
+
+/* Mode selector */
+.mode-select{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.mode-btn{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.03em;background:var(--cream);border:1px solid var(--border);border-radius:8px;padding:10px 16px;cursor:pointer;transition:all .15s;color:var(--muted);}
+.mode-btn:hover{border-color:var(--gold);color:var(--ink);}
+.mode-btn.active{background:var(--ink);border-color:var(--ink);color:#fff;}
+
+header{margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+h1{font-size:clamp(24px,5vw,40px);font-weight:900;line-height:1.05;color:var(--ink);margin-bottom:5px;}
+h1 em{color:var(--gold);font-style:normal;}
+
+/* Bank badges — squeezed onto one row under the mode tabs; scrolls
+   horizontally rather than wrapping if the viewport is too narrow to fit all. */
+.bank-badges{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:5px;margin-bottom:12px;}
+.badge{font-family:var(--mono);font-size:9px;background:var(--cream);border:1px solid var(--border);border-radius:20px;padding:3px 8px;color:var(--muted);white-space:nowrap;flex-shrink:0;}
+.badge.active{background:#e8f5f0;border-color:var(--green);color:var(--green);font-weight:600;}
+
+/* Mistral OCR API key settings */
+.ocr-settings{margin-bottom:10px;}
+.ocr-settings label{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px;}
+.ocr-settings-hint{color:var(--muted);font-weight:400;}
+.ocr-settings input{width:100%;font-family:var(--mono);font-size:12px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--ink);}
+.ocr-settings input:focus{outline:none;border-color:var(--gold);}
+/* Category lookup table: label + its action buttons share one row instead
+   of stacking, since there's plenty of width in the main column. */
+#catSettingsBlock{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;}
+#catSettingsBlock label{margin-bottom:0;}
+.cat-settings-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.cat-btn{background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-family:var(--mono);font-size:11px;color:var(--ink);cursor:pointer;transition:border-color .15s,color .15s;}
+.cat-btn:hover{border-color:var(--gold);}
+.cat-btn#resetCatBtn{display:none;color:var(--muted);}
+.cat-btn#resetCatBtn.show{display:inline-block;}
+
+/* Advanced settings — collapses the rarely-used Mistral key field to save
+   vertical space in the sidebar. Collapsed by default (no "open" attribute). */
+.advanced-section{margin-bottom:14px;}
+.advanced-section summary{cursor:pointer;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--muted);letter-spacing:0.03em;}
+.advanced-section summary:hover{color:var(--ink);}
+.advanced-section[open] summary{margin-bottom:10px;color:var(--ink);}
+.mistral-key-field label{display:block;font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px;}
+.mistral-key-field input{width:100%;font-family:var(--mono);font-size:12px;padding:9px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--ink);}
+.mistral-key-field input:focus{outline:none;border-color:var(--gold);}
+.mistral-bank-note{display:none;font-family:var(--mono);font-size:10px;color:var(--green);margin-top:7px;line-height:1.5;}
+.mistral-bank-note.show{display:block;}
+
+/* OCR mode indicator */
+.mode-bar{display:none;align-items:center;gap:10px;background:var(--blue-l);border:1px solid rgba(26,111,168,0.3);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-family:var(--mono);font-size:11px;color:var(--blue);}
+.mode-bar.show{display:flex;}
+.mode-icon{font-size:18px;flex-shrink:0;}
+.mode-text strong{display:block;font-weight:600;margin-bottom:1px;}
+
+/* Upload row: drop zone + parse button side by side */
+.upload-row{display:flex;align-items:stretch;gap:12px;margin-bottom:10px;}
+.upload-row .drop-zone{flex:1;margin-bottom:0;}
+.upload-row .parse-btn{width:auto;flex-shrink:0;margin-bottom:0;}
+.upload-row .clear-btn{width:auto;flex-shrink:0;margin-bottom:0;background:var(--cream);color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:15px 22px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:0.05em;cursor:pointer;transition:all .15s;}
+.upload-row .clear-btn:hover:not(:disabled){border-color:var(--red);color:var(--red);}
+.upload-row .clear-btn:disabled{opacity:.4;cursor:not-allowed;}
+@media(max-width:560px){.upload-row{flex-direction:column;}}
+
+/* Drop zone */
+.drop-zone{border:2px dashed var(--border);border-radius:10px;background:var(--cream);padding:16px 20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;margin-bottom:10px;}
+.drop-zone:hover,.drop-zone.over{border-color:var(--gold);background:#fdf8ef;}
+.drop-icon{font-size:26px;margin-bottom:6px;display:block;}
+.drop-label{font-size:15px;font-weight:700;color:var(--ink);margin-bottom:4px;}
+.drop-hint{font-family:var(--mono);font-size:11px;color:var(--muted);}
+#fileInput{display:none;}
+
+.file-list{margin-bottom:0;max-height:140px;overflow-y:auto;}
+.file-list:empty{display:none;}
+.fp-item{display:flex;align-items:center;gap:7px;background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:5px 9px;margin-bottom:4px;}
+.fp-icon{font-size:12px;flex-shrink:0;}
+.fp-name{flex:1;font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fp-size{font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0;}
+.fp-rm{background:none;border:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 5px;border-radius:4px;flex-shrink:0;}
+.fp-rm:hover{color:var(--red);}
+
+/* Result category tabs — shown only when an auto-detected batch contains
+   more than one document type, so each type's existing table/export UI
+   stays reachable without a combined-table redesign. */
+.result-tabs{display:none;gap:8px;margin-bottom:14px;}
+.result-tab{font-family:var(--mono);font-size:11px;font-weight:600;background:var(--cream);border:1px solid var(--border);border-radius:7px;padding:7px 14px;cursor:pointer;color:var(--muted);transition:all .15s;}
+.result-tab:hover{border-color:var(--gold);color:var(--ink);}
+.result-tab.active{background:var(--ink);border-color:var(--ink);color:#fff;}
+
+/* Parse button */
+.parse-btn{width:100%;background:var(--ink);color:#fff;border:none;border-radius:8px;padding:13px 24px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:0.07em;cursor:pointer;transition:all .2s;display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:20px;}
+.parse-btn:hover:not(:disabled){background:#2a2a50;box-shadow:0 4px 14px var(--shadow);}
+.parse-btn:disabled{opacity:.35;cursor:not-allowed;}
+.spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none;}
+.parse-btn.loading .spinner{display:block;}
+.parse-btn.loading .btn-ico{display:none;}
+@keyframes spin{to{transform:rotate(360deg);}}
+
+/* Progress */
+.progress{display:none;margin-bottom:16px;}
+.progress.show{display:block;}
+.progress-track{height:4px;background:var(--border);border-radius:2px;margin-bottom:7px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--gold),var(--gold-l));border-radius:2px;transition:width .3s ease;width:0%;}
+.progress-label{font-family:var(--mono);font-size:11px;color:var(--muted);}
+.progress-label.done{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;}
+.progress-label.done:hover{color:var(--ink);}
+/* OCR progress gets blue color */
+.progress.ocr-mode .progress-fill{background:linear-gradient(90deg,var(--blue),#4fa8d8);}
+
+/* Parsed-files panel — revealed by clicking the "Done — ..." progress label */
+.parsed-files-panel{display:none;margin-top:8px;padding:10px 12px;background:var(--cream);border:1px solid var(--border);border-radius:8px;font-family:var(--mono);font-size:11px;}
+.parsed-files-panel.show{display:block;}
+.pfp-group{margin-bottom:8px;}
+.pfp-group:last-child{margin-bottom:0;}
+.pfp-group-title{font-weight:600;color:var(--ink);margin-bottom:4px;}
+.pfp-group ul{list-style:none;margin:0;padding:0;}
+.pfp-group li{color:var(--muted);padding:2px 0 2px 14px;position:relative;}
+.pfp-group li::before{content:'📄';position:absolute;left:0;font-size:10px;}
+
+/* Error */
+.error-box{display:none;background:#fff5f5;border:1px solid rgba(192,57,43,0.25);border-radius:8px;padding:13px 15px;font-family:var(--mono);font-size:12px;color:var(--red);line-height:1.6;margin-bottom:16px;white-space:pre-wrap;}
+.error-box.show{display:block;}
+
+/* Debug */
+.debug-section{display:none;margin-bottom:16px;}
+.debug-section.show{display:block;}
+.debug-toggle-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+.debug-toggle{background:none;border:1px solid var(--border);border-radius:4px;padding:5px 11px;font-family:var(--mono);font-size:11px;color:var(--muted);cursor:pointer;}
+.debug-toggle:hover{border-color:var(--gold);color:var(--ink);}
+.debug-text{display:none;background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--mono);font-size:10px;color:var(--muted);white-space:pre-wrap;max-height:200px;overflow-y:auto;line-height:1.5;}
+.debug-text.show{display:block;}
+/* Copy button sits next to the toggle, not inside the collapsible text —
+   copies the raw text in one click without needing to expand it first. */
+.copy-btn{display:none;align-items:center;gap:5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:10px;color:var(--muted);cursor:pointer;transition:border-color .15s,color .15s;}
+.debug-section.show .copy-btn{display:flex;}
+.copy-btn:hover{border-color:var(--gold);color:var(--ink);}
+.copy-btn .icon-check{display:none;}
+.copy-btn.copied{border-color:var(--green);color:var(--green);}
+.copy-btn.copied .icon-copy{display:none;}
+.copy-btn.copied .icon-check{display:inline;}
+.ocr-preview{display:none;margin-top:10px;}
+.ocr-preview.show{display:block;}
+.ocr-preview-label{font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px;}
+.ocr-preview-scroll{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;}
+.ocr-preview-scroll canvas{border:1px solid var(--border);border-radius:4px;height:180px;width:auto;flex-shrink:0;cursor:pointer;}
+.ocr-preview-scroll canvas:hover{border-color:var(--gold);}
+
+/* Results */
+.results{display:none;}
+.results.show{display:block;}
+.results-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+.results-title{font-size:20px;font-weight:700;}
+.results-meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;}
+.bank-detected{font-family:var(--mono);font-size:11px;color:var(--green);margin-top:2px;font-weight:600;}
+.ocr-detected{font-family:var(--mono);font-size:11px;color:var(--blue);margin-top:2px;font-weight:600;}
+.export-btn{background:var(--green);color:#fff;border:none;border-radius:6px;padding:9px 16px;font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.04em;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px;white-space:nowrap;}
+.export-btn:hover{background:#1e4d38;box-shadow:0 3px 10px rgba(45,106,79,0.25);}
+
+/* Summary */
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
+.sum-card{background:var(--cream);border:1px solid var(--border);border-radius:8px;padding:13px;}
+.sum-lbl{font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--muted);margin-bottom:5px;text-transform:uppercase;}
+.sum-val{font-family:var(--mono);font-size:15px;font-weight:600;}
+.sv-n{color:var(--ink);}.sv-c{color:var(--red);}.sv-d{color:var(--green);}
+
+/* Table */
+.table-wrap{background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden;overflow-x:auto;box-shadow:0 1px 4px var(--shadow);}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+thead{background:var(--ink);color:#fff;}
+th{padding:10px 14px;text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:0.08em;font-weight:600;}
+td{padding:9px 14px;border-bottom:1px solid #f0f0f0;vertical-align:middle;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:#fafafa;}
+.td-date{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;min-width:80px;}
+.td-desc{color:var(--ink);line-height:1.4;}
+.td-bank{font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;}
+.td-cat{font-family:var(--mono);font-size:10px;color:var(--muted);white-space:nowrap;}
+.td-amt{font-family:var(--mono);font-size:12px;font-weight:600;text-align:right;white-space:nowrap;}
+.amt-cr{color:var(--red);}.amt-dr{color:var(--green);}
+
+/* Pagination */
+.pagination{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;font-family:var(--mono);font-size:12px;}
+.pg-btn{background:var(--cream);border:1px solid var(--border);border-radius:4px;padding:5px 12px;cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--ink);transition:border-color .15s;}
+.pg-btn:hover:not(:disabled){border-color:var(--gold);}
+.pg-btn:disabled{opacity:.35;cursor:not-allowed;}
+.pg-info{color:var(--muted);}
+@media(max-width:560px){.summary{grid-template-columns:1fr;}}
+
+/* Warning box (bill mode) */
+.warn-box{display:none;background:#fff8ea;border:1px solid var(--gold);color:#7a5c00;border-radius:8px;padding:12px 14px;font-family:var(--mono);font-size:12px;white-space:pre-wrap;margin-bottom:16px;}
+.warn-box.show{display:block;}
+.review-note{font-family:var(--mono);font-size:11px;color:#7a5c00;background:#fff8ea;border:1px solid var(--gold);border-radius:8px;padding:9px 13px;margin-bottom:14px;display:none;}
+.review-note.show{display:block;}
+
+/* Bill-mode grouped table columns */
+table.bill-table{font-family:var(--mono);}
+table.bill-table th,table.bill-table td{text-align:right;white-space:nowrap;}
+table.bill-table th:first-child,table.bill-table td:first-child{text-align:left;}
+table.bill-table thead tr.grp th{background:var(--cream);color:var(--ink);font-size:9px;letter-spacing:.06em;text-transform:uppercase;}
+td.editable{cursor:text;}
+td.editable:hover{background:#fafafa;}
+td.editable:focus{outline:2px solid var(--gold);outline-offset:-2px;background:#fff;}
+td.review{background:#fff8ea;}
+td.missing{color:var(--muted);font-style:italic;}
+.grp-elec{border-left:2px solid var(--gold);}
+.grp-gas{border-left:2px solid var(--blue);}
+.grp-water{border-left:2px solid var(--blue);}
+.grp-refuse{border-left:2px solid var(--blue);}
+.grp-sp{border-left:2px solid var(--green);}
+
+/* Payslip-mode table */
+table.payslip-table td,table.payslip-table th{white-space:nowrap;}
+td.psl-missing{color:var(--muted);}
+.psl-format{font-family:var(--mono);font-size:10px;color:var(--muted);}
+
+/* Vertical scroll for tables with many rows (payslip mode) — keeps the page
+   from growing indefinitely; header stays pinned while scrolling. */
+.table-wrap.scroll-y{max-height:480px;overflow-y:auto;}
+.table-wrap.scroll-y thead th{position:sticky;top:0;z-index:1;background:var(--ink);color:#fff;}
+
+/* Mistral cloud-OCR consent modal — lists every scanned file that would be
+   sent to Mistral so the user can drop any (or all) of them back to local
+   Tesseract OCR before confirming. */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(26,26,46,0.5);z-index:1000;align-items:center;justify-content:center;padding:20px;}
+.modal-overlay.show{display:flex;}
+.modal-box{background:#fff;border-radius:12px;padding:22px 24px;max-width:460px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,0.3);}
+.modal-box h3{font-size:16px;font-weight:700;margin-bottom:8px;}
+.modal-sub{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.6;}
+.modal-file-list{margin-bottom:8px;}
+.modal-file-list:empty::after{content:'No files left — everything will be OCR\'d locally.';display:block;font-family:var(--mono);font-size:11px;color:var(--muted);font-style:italic;padding:6px 0;}
+.modal-file-item{display:flex;align-items:center;gap:7px;background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:6px 9px;margin-bottom:5px;}
+.modal-file-item .mfi-name{flex:1;font-family:var(--mono);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.modal-file-item .mfi-rm{background:none;border:none;font-size:12px;color:var(--muted);cursor:pointer;padding:2px 5px;border-radius:4px;flex-shrink:0;}
+.modal-file-item .mfi-rm:hover{color:var(--red);}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}
+.modal-btn{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.02em;padding:9px 16px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:var(--cream);color:var(--ink);transition:border-color .15s;}
+.modal-btn:hover{border-color:var(--gold);}
+.modal-btn.primary{background:var(--ink);color:#fff;border-color:var(--ink);}
+.modal-btn.primary:disabled{opacity:.4;cursor:not-allowed;}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="page-layout">
+    <div class="main-col">
+
+  <!-- Parser mode selector — swaps drop-zone copy, results table, sidebar info -->
+  <div class="mode-select" id="modeSelect">
+    <button class="mode-btn active" id="mode-auto" data-mode="auto" type="button">🔀 Auto-Detect</button>
+    <button class="mode-btn" id="mode-bank" data-mode="bank" type="button">🏦 Bank Statement</button>
+    <button class="mode-btn" id="mode-bill" data-mode="bill" type="button">💡 Electricity &amp; Water</button>
+    <button class="mode-btn" id="mode-payslip" data-mode="payslip" type="button">📄 Pay Slip</button>
+  </div>
+
+  <div class="bank-badges" id="modeBadges">
+    <span class="badge" id="b-dbs">DBS/POSB</span>
+    <span class="badge" id="b-hsbc">HSBC</span>
+    <span class="badge" id="b-citi">Citibank</span>
+    <span class="badge" id="b-maybank">Maybank</span>
+    <span class="badge" id="b-sc">Standard Chartered</span>
+    <span class="badge" id="b-ocbc">OCBC</span>
+    <span class="badge" id="b-paylah">DBS PayLah!</span>
+    <span class="badge" id="b-generic">Generic</span>
+  </div>
+
+  <div class="ocr-settings" id="catSettingsBlock">
+    <label>Category lookup table <span class="ocr-settings-hint" id="catTableInfo">(— entries)</span></label>
+    <div class="cat-settings-actions">
+      <button class="cat-btn" id="exportCatBtn" type="button">⬇ Export as Excel</button>
+      <button class="cat-btn" id="importCatBtn" type="button">⬆ Import Excel</button>
+      <button class="cat-btn" id="resetCatBtn" type="button">↺ Reset to built-in</button>
+      <input type="file" id="catFileInput" accept=".xlsx,.xls" style="display:none">
+    </div>
+  </div>
+
+  <div class="upload-row">
+    <div class="drop-zone" id="dropZone">
+      <span class="drop-icon" id="dropIcon">🏦</span>
+      <div class="drop-label" id="dropLabel">Drop your PDF bank statement here</div>
+      <div class="drop-hint" id="dropHint">one or multiple PDF files · click to browse · 100% local, never sent to the cloud</div>
+      <input type="file" id="fileInput" accept=".pdf" multiple>
+    </div>
+
+    <button class="parse-btn" id="parseBtn" disabled>
+      <span class="btn-ico">▶</span>
+      <div class="spinner"></div>
+      <span id="parseBtnTxt">PARSE STATEMENT</span>
+    </button>
+
+    <button class="clear-btn" id="clearBtn" type="button" disabled>✕ CLEAR FILES</button>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+  <div class="warn-box" id="warnBox"></div>
+
+  <div class="results" id="results">
+    <div class="result-tabs" id="resultTabs"></div>
+    <div class="results-header">
+      <div>
+        <div class="results-title" id="resultsTitle">Transactions</div>
+        <div class="results-meta" id="resultsMeta">—</div>
+        <div class="bank-detected" id="bankDetected"></div>
+        <div class="ocr-detected" id="ocrDetected"></div>
+      </div>
+      <button class="export-btn" id="exportBtn">⬇ Export to Excel</button>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="review-note" id="reviewNote">⚠ Cells shaded amber are best-effort — the SP gas/water/refuse/subtotal figures come from a bill layout that doesn't always extract cleanly as text. Click any cell to correct it against the original bill; the export uses whatever is on screen.</div>
+    <div class="table-wrap" id="tableWrap">
+      <table id="resultsTable">
+        <thead id="resultsThead"><tr>
+          <th>BANK</th>
+          <th>STATEMENT DATE</th>
+          <th>TRANSACTION DESCRIPTION</th>
+          <th style="text-align:right">AMOUNT</th>
+          <th>CATEGORY</th>
+          <th>TRANSACTION DATE</th>
+        </tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+    </div>
+
+    <div class="resize-handle" id="resizeHandle" title="Drag to resize · click to collapse">
+      <button class="collapse-toggle" id="collapseToggle" type="button" aria-label="Collapse panel">‹</button>
+    </div>
+
+    <aside class="sidebar" id="sidebarPanel">
+      <header>
+        <h1 id="pageTitle">Bank <em>Statement</em> Parser</h1>
+      </header>
+
+      <!-- Optional Mistral OCR API key — stored only in this browser's localStorage,
+           never written to source. Used for image-based PDFs when present; falls
+           back to local Tesseract OCR when empty. Collapsed by default since it's
+           rarely touched — most users leave it blank and use local Tesseract OCR. -->
+      <details class="advanced-section" id="advancedSection">
+        <summary>⚙ Advanced settings</summary>
+        <div class="mistral-key-field">
+          <label for="mistralKeyInput" title="stored only in your browser, used for scanned PDFs; leave blank to run OCR locally via Tesseract instead (your document never leaves the browser — only generic OCR model files are downloaded)">Mistral OCR API Key</label>
+          <input type="password" id="mistralKeyInput" placeholder="Paste your Mistral API key to enable cloud OCR" autocomplete="off" title="stored only in your browser, used for scanned PDFs; leave blank to run OCR locally via Tesseract instead (your document never leaves the browser — only generic OCR model files are downloaded)">
+          <div class="mistral-bank-note" id="mistralBankNote">🔒 Not used in Bank Statement mode — scanned bank statements are always OCR'd locally, this key is ignored here.</div>
+        </div>
+      </details>
+
+      <div class="progress" id="progress">
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-label" id="progressLabel">Starting…</div>
+        <div class="parsed-files-panel" id="parsedFilesPanel"></div>
+      </div>
+
+      <!-- OCR mode notice shown after detection -->
+      <div class="mode-bar" id="modeBar">
+        <span class="mode-icon">🔍</span>
+        <div class="mode-text">
+          <strong id="modeTitle">OCR Mode</strong>
+          <span id="modeDesc">Image PDF detected — running Tesseract OCR. This may take 30–60 seconds per page.</span>
+        </div>
+      </div>
+
+      <div class="debug-section" id="debugSection">
+        <div class="debug-toggle-row">
+          <button class="debug-toggle" id="debugToggle">▸ Show extracted raw text (debug)</button>
+          <button class="copy-btn" id="copyDebugBtn" type="button" title="Copy all text">
+            <svg class="icon-copy" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <svg class="icon-check" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span class="copy-btn-label">Copy</span>
+          </button>
+        </div>
+        <div class="debug-text" id="debugText"></div>
+        <div class="ocr-preview" id="ocrPreview">
+          <div class="ocr-preview-label">▸ Preprocessed page images sent to OCR (click to enlarge)</div>
+          <div class="ocr-preview-scroll" id="ocrPreviewScroll"></div>
+        </div>
+      </div>
+
+      <div class="file-list" id="fileList"></div>
+    </aside>
+  </div>
+</div>
+
+<!-- Mistral cloud-OCR consent modal — Bank Statement mode never shows this
+     (it never uses cloud OCR); Bill/Pay Slip/Auto-Detect show it whenever a
+     scanned file needs OCR and a Mistral key is set, listing every such file
+     so the user can drop any of them back to local-only Tesseract OCR. -->
+<div class="modal-overlay" id="mistralModalOverlay">
+  <div class="modal-box">
+    <h3>Send these files to Mistral cloud OCR?</h3>
+    <p class="modal-sub" id="mistralModalSub">These scanned PDFs need OCR to read. Remove any you'd rather keep private — removed files are OCR'd on-device with Tesseract instead, right here in your browser.</p>
+    <div class="modal-file-list" id="mistralModalList"></div>
+    <div class="modal-actions">
+      <button class="modal-btn" id="mistralModalCancelAll" type="button">Keep all local</button>
+      <button class="modal-btn primary" id="mistralModalConfirm" type="button">Send remaining to Mistral</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Both pdf.min.js and pdf.worker.min.js are loaded as <script> tags above.
+// Setting workerSrc='' tells PDF.js to use the already-loaded worker code
+// on the main thread — no external fetch, no missing WorkerMessageHandler.
+pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+
+let selectedFiles = [], allTransactions = [], currentPage = 1, detectedBank = '';
+let combinedRows = []; // electricity/water bill mode
+let allParsedBills = []; // raw per-file bill objects (pre-combineBills) — kept so
+                          // re-combining stays correct as more files are added
+                          // incrementally (a later file can complete an earlier
+                          // month's Geneco/SP pairing).
+let payslipRows = [];  // payslip mode
+let currentMode = 'auto';
+let autoResults = null; // { bank: {transactions}, bill: {rows}, payslip: {rows} } — populated by runAutoParse
+
+// True once there's anything a "Clear Files" click would actually need to clear —
+// pending files, or results accumulated from a previous parse run.
+function hasAnyResults() {
+  return allTransactions.length > 0 || combinedRows.length > 0 || payslipRows.length > 0 || !!autoResults;
+}
+const PAGE_SIZE = 50;
+const $ = id => document.getElementById(id);
+
+const dropZone=$('dropZone'), fileInput=$('fileInput'), fileList=$('fileList');
+const dropIcon=$('dropIcon'), dropLabel=$('dropLabel'), dropHint=$('dropHint');
+const parseBtn=$('parseBtn'), parseBtnTxt=$('parseBtnTxt'), clearBtn=$('clearBtn');
+const progressEl=$('progress'), progressFill=$('progressFill'), progressLbl=$('progressLabel');
+const parsedFilesPanel=$('parsedFilesPanel');
+const errorBox=$('errorBox'), warnBox=$('warnBox'), debugSection=$('debugSection'), debugToggle=$('debugToggle'), debugText=$('debugText');
+const results=$('results'), tableBody=$('tableBody'), exportBtn=$('exportBtn');
+const resultsTable=$('resultsTable'), resultsThead=$('resultsThead'), resultsTitle=$('resultsTitle'), reviewNote=$('reviewNote');
+const tableWrap=$('tableWrap');
+const resultsMeta=$('resultsMeta'), summaryEl=$('summary'), paginationEl=$('pagination');
+const bankDetectedEl=$('bankDetected'), ocrDetectedEl=$('ocrDetected');
+const modeBar=$('modeBar'), modeTitle=$('modeTitle'), modeDesc=$('modeDesc');
+const mistralKeyInput=$('mistralKeyInput');
+const catSettingsBlock=$('catSettingsBlock');
+const pageTitle=$('pageTitle'), modeBadges=$('modeBadges');
+const resultTabs=$('resultTabs');
+const THEAD_BANK = resultsThead.innerHTML;
+const THEAD_BILL = '<tr class="grp"><th></th><th colspan="3" class="grp-elec">Geneco Electricity</th><th colspan="3" class="grp-gas">Gas</th><th colspan="2" class="grp-water">Water</th><th class="grp-refuse">Refuse</th><th class="grp-sp">SP</th><th></th></tr>'
+  + '<tr class="sub"><th>Date</th><th class="grp-elec">Elec ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-gas">Gas ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-water">Water ($)</th><th>Cu M</th><th class="grp-refuse">Refuse ($)</th><th class="grp-sp">Subtotal ($)</th><th>Total Payable ($)</th></tr>';
+
+// ── Sidebar resize / collapse ───────────────────────────────────────────────
+const pageLayoutEl = document.querySelector('.page-layout');
+const resizeHandle = $('resizeHandle'), collapseToggle = $('collapseToggle');
+const SIDEBAR_MIN = 160, SIDEBAR_MAX = 480, SIDEBAR_COLLAPSE_AT = 110, SIDEBAR_DEFAULT = 210;
+let sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, parseInt(localStorage.getItem('ppSidebarW'), 10) || SIDEBAR_DEFAULT));
+let sidebarCollapsed = localStorage.getItem('ppSidebarCollapsed') === '1';
+
+// Shrinks the sidebar's mode title (e.g. "Electricity & Water Bill Parser")
+// down from its default font-size until it fits on one line, so a narrow
+// resized/collapsed panel never wraps the title onto a second row.
+function fitPageTitle() {
+  pageTitle.style.fontSize = '';
+  let size = parseFloat(getComputedStyle(pageTitle).fontSize);
+  const min = 12;
+  while (pageTitle.scrollWidth > pageTitle.clientWidth && size > min) {
+    size -= 1;
+    pageTitle.style.fontSize = size + 'px';
+  }
+}
+
+function applySidebarWidth() {
+  pageLayoutEl.style.setProperty('--sidebar-w', sidebarCollapsed ? '0px' : sidebarWidth + 'px');
+  collapseToggle.textContent = sidebarCollapsed ? '›' : '‹';
+  collapseToggle.setAttribute('aria-label', sidebarCollapsed ? 'Expand panel' : 'Collapse panel');
+  resizeHandle.title = sidebarCollapsed ? 'Drag or click to expand' : 'Drag to resize · click to collapse';
+  fitPageTitle();
+  // The width change animates via CSS transition (unless mid-drag, where
+  // .no-anim disables it) — re-fit once that animation settles so the title
+  // isn't measured against a stale mid-transition width.
+  pageLayoutEl.addEventListener('transitionend', fitPageTitle, { once: true });
+}
+
+function toggleSidebarCollapsed() {
+  sidebarCollapsed = !sidebarCollapsed;
+  applySidebarWidth();
+  localStorage.setItem('ppSidebarCollapsed', sidebarCollapsed ? '1' : '0');
+}
+
+(function initSidebarResize() {
+  let dragging = false, dragStartX = 0, dragStartWidth = 0;
+  resizeHandle.addEventListener('mousedown', e => {
+    if (e.target === collapseToggle) return;
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartWidth = sidebarCollapsed ? SIDEBAR_MIN : sidebarWidth;
+    sidebarCollapsed = false;
+    pageLayoutEl.classList.add('no-anim');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const w = dragStartWidth + (e.clientX - dragStartX);
+    if (w < SIDEBAR_COLLAPSE_AT) {
+      sidebarCollapsed = true;
+    } else {
+      sidebarCollapsed = false;
+      sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w));
+    }
+    applySidebarWidth();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    pageLayoutEl.classList.remove('no-anim');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('ppSidebarW', sidebarWidth);
+    localStorage.setItem('ppSidebarCollapsed', sidebarCollapsed ? '1' : '0');
+  });
+  resizeHandle.addEventListener('dblclick', e => {
+    if (e.target === collapseToggle) return;
+    toggleSidebarCollapsed();
+  });
+  collapseToggle.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleSidebarCollapsed();
+  });
+})();
+window.addEventListener('resize', fitPageTitle);
+applySidebarWidth();
+
+// ── Mode selector ──────────────────────────────────────────────────────────────
+const MODE_CONFIG = {
+  auto: {
+    dropIcon: '🔀', dropLabel: 'Drop any PDF — type is detected automatically',
+    dropHint: 'bank statement · electricity/water bill · pay slip · any mix · multiple files',
+    parseBtnText: 'PARSE', resultsTitle: 'Results',
+    pageTitle: 'Auto-<em>Detect</em> Parser',
+    badges: ''
+  },
+  bank: {
+    dropIcon: '🏦', dropLabel: 'Drop your PDF bank statement here',
+    dropHint: 'one or multiple PDF files · click to browse · 100% local, never sent to the cloud',
+    parseBtnText: 'PARSE STATEMENT', resultsTitle: 'Transactions',
+    pageTitle: 'Bank <em>Statement</em> Parser',
+    badges: `<span class="badge" id="b-dbs">DBS/POSB</span><span class="badge" id="b-hsbc">HSBC</span><span class="badge" id="b-citi">Citibank</span><span class="badge" id="b-maybank">Maybank</span><span class="badge" id="b-sc">Standard Chartered</span><span class="badge" id="b-ocbc">OCBC</span><span class="badge" id="b-paylah">DBS PayLah!</span><span class="badge" id="b-generic">Generic</span>`
+  },
+  bill: {
+    dropIcon: '💡', dropLabel: 'Drop your bill PDFs here',
+    dropHint: 'drag & drop or click to browse · Geneco + SP bills, any mix, multiple months · your documents stay in this browser',
+    parseBtnText: 'PARSE BILLS', resultsTitle: 'Monthly Summary',
+    pageTitle: 'Electricity &amp; Water <em>Bill Parser</em>',
+    badges: `<span class="badge" id="bl-geneco">Geneco Electricity</span><span class="badge" id="bl-sp">SP (Gas/Water/Refuse)</span>`
+  },
+  payslip: {
+    dropIcon: '📄', dropLabel: 'Drop your pay slip PDFs here',
+    dropHint: 'one or multiple PDF files · any supported format · your documents stay in this browser',
+    parseBtnText: 'PARSE PAY SLIPS', resultsTitle: 'Pay Slips',
+    pageTitle: 'Pay <em>Slip</em> Parser',
+    badges: `<span class="badge" id="ps-legacy">Tabular / Salary Advice</span><span class="badge" id="ps-uhp">UHP System-generated</span>`
+  }
+};
+
+function highlightModeButton(mode) {
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+}
+// Sets the visual chrome (drop-zone copy, results table shape, sidebar) for a
+// mode. Split out from switchMode so activateAutoCategory can reuse it when
+// switching between an auto-detected batch's result tabs — that path must NOT
+// clear already-computed results or the mode-button highlight (the user is
+// still browsing one auto-detected batch, not starting a fresh upload).
+function applyModeChrome(mode) {
+  const cfg = MODE_CONFIG[mode];
+  dropIcon.textContent = cfg.dropIcon; dropIcon.style.display = '';
+  dropLabel.textContent = cfg.dropLabel; dropHint.textContent = cfg.dropHint;
+  parseBtnTxt.textContent = cfg.parseBtnText;
+  resultsTitle.textContent = cfg.resultsTitle;
+  pageTitle.innerHTML = cfg.pageTitle;
+  fitPageTitle();
+  modeBadges.innerHTML = cfg.badges;
+  catSettingsBlock.style.display = mode === 'bank' ? '' : 'none';
+  summaryEl.style.display = mode === 'bank' ? '' : 'none';
+  paginationEl.style.display = mode === 'bank' ? '' : 'none';
+  resultsTable.className = mode === 'bill' ? 'bill-table' : (mode === 'payslip' ? 'payslip-table' : '');
+  tableWrap.classList.toggle('scroll-y', mode === 'payslip');
+  resultsThead.innerHTML = mode === 'bank' ? THEAD_BANK : (mode === 'bill' ? THEAD_BILL : '');
+  $('mistralBankNote').classList.toggle('show', mode === 'bank');
+}
+function switchMode(mode) {
+  currentMode = mode;
+  highlightModeButton(mode);
+  applyModeChrome(mode);
+  selectedFiles = []; fileInput.value = '';
+  fileList.innerHTML = ''; parseBtn.disabled = true; clearBtn.disabled = true;
+  clearUI(); highlightBank('');
+}
+document.querySelectorAll('.mode-btn').forEach(b => b.addEventListener('click', () => switchMode(b.dataset.mode)));
+switchMode('auto');
+
+// ── Mistral OCR API key (stored client-side only, never in source) ────────────
+const MISTRAL_KEY_STORAGE = 'mistralApiKey';
+mistralKeyInput.value = localStorage.getItem(MISTRAL_KEY_STORAGE) || '';
+mistralKeyInput.addEventListener('input', () => {
+  const v = mistralKeyInput.value.trim();
+  if (v) localStorage.setItem(MISTRAL_KEY_STORAGE, v);
+  else localStorage.removeItem(MISTRAL_KEY_STORAGE);
+});
+function getMistralKey() { return (localStorage.getItem(MISTRAL_KEY_STORAGE) || '').trim(); }
+
+// Bank Statement mode never calls this — bank statements are always OCR'd
+// locally (see runBankParse). Bill / Pay Slip / Auto-Detect modes call this
+// once per parse run, after scanning every selected file for which ones need
+// OCR at all, so the user sees the full list up front and can drop any (or
+// all) of them back to local-only Tesseract OCR before anything is sent.
+// Resolves to the array of file labels the user left in — i.e. approved for
+// Mistral. An empty array (including a straight "Keep all local") means
+// nothing gets sent and every OCR-needed file falls back to local Tesseract.
+const mistralModalOverlay = $('mistralModalOverlay'), mistralModalList = $('mistralModalList');
+const mistralModalSub = $('mistralModalSub'), mistralModalConfirm = $('mistralModalConfirm'), mistralModalCancelAll = $('mistralModalCancelAll');
+function confirmMistralFileList(fileLabels, contextMsg) {
+  return new Promise(resolve => {
+    let remaining = fileLabels.slice();
+    mistralModalSub.textContent = contextMsg;
+    function render() {
+      mistralModalList.innerHTML = remaining.map((label, i) => `
+        <div class="modal-file-item" data-i="${i}">
+          <span class="mfi-name">${esc(label)}</span>
+          <button class="mfi-rm" type="button" title="Keep this file local instead">✕</button>
+        </div>`).join('');
+      mistralModalConfirm.disabled = remaining.length === 0;
+      mistralModalConfirm.textContent = remaining.length ? `Send ${remaining.length} to Mistral` : 'Nothing left to send';
+      mistralModalList.querySelectorAll('.mfi-rm').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const i = parseInt(btn.closest('.modal-file-item').dataset.i, 10);
+          remaining.splice(i, 1);
+          render();
+        });
+      });
+    }
+    render();
+    mistralModalOverlay.classList.add('show');
+    function cleanup() {
+      mistralModalOverlay.classList.remove('show');
+      mistralModalConfirm.removeEventListener('click', onConfirm);
+      mistralModalCancelAll.removeEventListener('click', onCancelAll);
+    }
+    function onConfirm() { cleanup(); resolve(remaining.slice()); }
+    function onCancelAll() { cleanup(); resolve([]); }
+    mistralModalConfirm.addEventListener('click', onConfirm);
+    mistralModalCancelAll.addEventListener('click', onCancelAll);
+  });
+}
+const exportCatBtn=$('exportCatBtn'), importCatBtn=$('importCatBtn'), resetCatBtn=$('resetCatBtn'), catFileInput=$('catFileInput'), catTableInfo=$('catTableInfo');
+
+// ── File handling ─────────────────────────────────────────────────────────────
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('over');
+  const pdfs = [...e.dataTransfer.files].filter(f => f.type === 'application/pdf');
+  if (!pdfs.length) { showErr('Please upload PDF files only.'); return; }
+  addFiles(pdfs);
+});
+fileInput.addEventListener('change', () => {
+  const pdfs = [...fileInput.files].filter(f => f.type === 'application/pdf');
+  if (pdfs.length) addFiles(pdfs);
+  fileInput.value = '';
+});
+
+function addFiles(newFiles) {
+  for (const f of newFiles) {
+    if (!selectedFiles.find(x => x.name === f.name && x.size === f.size))
+      selectedFiles.push(f);
+  }
+  renderFileList();
+  parseBtn.disabled = selectedFiles.length === 0;
+  clearBtn.disabled = selectedFiles.length === 0 && !hasAnyResults();
+  // Adding files is additive — any already-parsed results stay on screen;
+  // only per-run status (errors/warnings/OCR notice) gets cleared.
+  clearTransientUI();
+}
+
+function removeFile(idx) {
+  selectedFiles.splice(idx, 1);
+  renderFileList();
+  parseBtn.disabled = selectedFiles.length === 0;
+  clearBtn.disabled = selectedFiles.length === 0 && !hasAnyResults();
+  clearTransientUI();
+}
+
+function renderFileList() {
+  fileList.innerHTML = '';
+  if (!selectedFiles.length) {
+    dropZone.style.display = ''; dropZone.style.padding = '';
+    dropIcon.style.display = '';
+    const cfg = MODE_CONFIG[currentMode];
+    dropLabel.textContent = cfg.dropLabel; dropHint.textContent = cfg.dropHint;
+    return;
+  }
+  dropZone.style.display = 'none';
+  selectedFiles.forEach((f, i) => {
+    const div = document.createElement('div');
+    div.className = 'fp-item';
+    div.innerHTML = `<span class="fp-icon">📄</span>
+      <span class="fp-name">${esc(f.name)}</span>
+      <span class="fp-size">${(f.size/1024).toFixed(1)} KB</span>
+      <button class="fp-rm" title="Remove">✕</button>`;
+    div.querySelector('.fp-rm').addEventListener('click', () => removeFile(i));
+    fileList.appendChild(div);
+  });
+  // Show drop zone again as a smaller "add more" strip if files present
+  dropZone.style.display = '';
+  dropZone.style.padding = '16px 24px';
+  dropIcon.style.display = 'none';
+  dropLabel.textContent = '+ Add more PDF files';
+  dropHint.textContent = 'drag & drop or click to browse';
+}
+
+// Called after a parse run successfully adds at least one new row — the just-
+// parsed files are "committed" into the results, so the pending file list is
+// cleared and ready for the next batch, while the results table (and the
+// Clear Files button) stay live until the user explicitly clears them.
+function commitParsedFiles() {
+  selectedFiles = []; fileInput.value = '';
+  renderFileList();
+  parseBtn.disabled = true;
+  clearBtn.disabled = !hasAnyResults();
+}
+
+function resetAll() {
+  selectedFiles = []; fileInput.value = '';
+  dropZone.style.display = ''; dropZone.style.padding = '';
+  dropIcon.style.display = '';
+  const cfg = MODE_CONFIG[currentMode];
+  dropLabel.textContent = cfg.dropLabel;
+  dropHint.textContent = cfg.dropHint;
+  fileList.innerHTML = '';
+  parseBtn.disabled = true; clearBtn.disabled = true; clearUI(); highlightBank('');
+}
+// Clears per-run status only (errors/warnings/OCR notice/preview) — used when
+// the pending file selection changes, so already-parsed results stay visible.
+function clearTransientUI() {
+  progressEl.classList.remove('show');
+  errorBox.classList.remove('show'); warnBox.classList.remove('show'); warnBox.textContent='';
+  modeBar.classList.remove('show'); progressEl.classList.remove('ocr-mode');
+  const previewScroll = $('ocrPreviewScroll'); if(previewScroll) previewScroll.innerHTML='';
+  $('ocrPreview')?.classList.remove('show');
+  progressLbl.classList.remove('done');
+  parsedFilesPanel.classList.remove('show'); parsedFilesPanel.innerHTML = '';
+}
+// Full reset — wipes accumulated results too. Used by "Clear Files" and by
+// switching modes (a mode switch always starts fresh).
+function clearUI() {
+  clearTransientUI();
+  results.classList.remove('show');
+  debugSection.classList.remove('show'); reviewNote.classList.remove('show');
+  debugText.textContent = '';
+  tableBody.innerHTML=''; summaryEl.innerHTML=''; paginationEl.innerHTML='';
+  bankDetectedEl.textContent=''; ocrDetectedEl.textContent='';
+  allTransactions=[]; detectedBank=''; combinedRows=[]; allParsedBills=[]; payslipRows=[];
+  resultTabs.innerHTML=''; resultTabs.style.display='none'; autoResults=null;
+}
+function showWarn(msg) { warnBox.textContent = (warnBox.textContent ? warnBox.textContent + '\n' : '') + msg; warnBox.classList.add('show'); }
+
+// Filenames behind the "Done — bank (2), payslip (3)" summary, grouped the
+// same way as the counts — bank/payslip counts are transactions/rows (not
+// files), so this de-dupes back down to the actual source files per category.
+function getParsedFilenames() {
+  const groups = {};
+  if (autoResults?.bank?.transactions?.length) groups.bank = [...new Set(autoResults.bank.transactions.map(t => t.file))];
+  if (autoResults?.bill?.rows?.length) groups.bill = [...new Set(autoResults.bill.rows.flatMap(r => r.files || []))];
+  if (autoResults?.payslip?.rows?.length) groups.payslip = [...new Set(autoResults.payslip.rows.map(r => r.file))];
+  return groups;
+}
+function renderParsedFilesPanel() {
+  const groups = getParsedFilenames();
+  parsedFilesPanel.innerHTML = Object.entries(groups).map(([cat, files]) => `
+    <div class="pfp-group">
+      <div class="pfp-group-title">${CATEGORY_LABEL[cat]} (${files.length})</div>
+      <ul>${files.map(f => `<li>${esc(f)}</li>`).join('')}</ul>
+    </div>`).join('');
+}
+// The label is only clickable once it reads "Done — ..." (see the 'done'
+// class toggle in runAutoParse / clearTransientUI), not during "Starting…"
+// or per-page OCR progress text.
+progressLbl.addEventListener('click', () => {
+  if (!progressLbl.classList.contains('done')) return;
+  const open = parsedFilesPanel.classList.toggle('show');
+  if (open) renderParsedFilesPanel();
+});
+
+debugToggle.addEventListener('click', () => {
+  const open = debugText.classList.toggle('show');
+  debugToggle.textContent = (open?'▾':'▸')+' Show extracted raw text (debug)';
+});
+
+const copyDebugBtn = $('copyDebugBtn');
+copyDebugBtn.addEventListener('click', async () => {
+  const text = debugText.textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e2) {}
+    document.body.removeChild(ta);
+  }
+  const label = copyDebugBtn.querySelector('.copy-btn-label');
+  copyDebugBtn.classList.add('copied');
+  label.textContent = 'Copied!';
+  clearTimeout(copyDebugBtn._resetTimer);
+  copyDebugBtn._resetTimer = setTimeout(() => {
+    copyDebugBtn.classList.remove('copied');
+    label.textContent = 'Copy';
+  }, 1500);
+});
+
+// ── Main parse flow ───────────────────────────────────────────────────────────
+parseBtn.addEventListener('click', async () => {
+  if (!selectedFiles.length) return;
+  // The selected MODE BUTTON (not currentMode) decides which parser to run —
+  // currentMode also tracks which auto-detect result tab is being *viewed*
+  // (activateAutoCategory changes it without touching the button), so reading
+  // it here would wrongly route a second incremental parse through whichever
+  // tab the user last clicked instead of back through auto-detect.
+  const modeAtStart = document.querySelector('.mode-btn.active')?.dataset.mode || currentMode;
+  clearTransientUI(); // per-run status only — already-parsed results stay visible
+  parseBtn.classList.add('loading'); parseBtn.disabled=true; clearBtn.disabled=true;
+  parseBtnTxt.textContent='PARSING…'; progressEl.classList.add('show');
+
+  try {
+    if (modeAtStart === 'auto') await runAutoParse();
+    else if (modeAtStart === 'bank') await runBankParse();
+    else if (modeAtStart === 'bill') await runBillParse();
+    else await runPayslipParse();
+  } catch(err) {
+    showErr('Error: ' + err.message);
+    console.error(err);
+  } finally {
+    parseBtn.classList.remove('loading');
+    parseBtn.disabled = selectedFiles.length === 0;
+    clearBtn.disabled = selectedFiles.length === 0 && !hasAnyResults();
+    parseBtnTxt.textContent = MODE_CONFIG[modeAtStart].parseBtnText;
+  }
+});
+clearBtn.addEventListener('click', resetAll);
+
+// Bank Statement mode is the one guarantee this app makes explicitly: nothing
+// uploaded here is ever sent to Mistral or any other cloud service, Mistral
+// key present or not. Scanned pages always go through local Tesseract OCR.
+async function runBankParse() {
+  {
+    let combinedTransactions = [];
+    let allRawText = '';
+    let anyOCR = false;
+    const total = selectedFiles.length;
+
+    for (let fi = 0; fi < total; fi++) {
+      const file = selectedFiles[fi];
+      const fileLabel = `[${fi+1}/${total}] ${file.name}`;
+
+      setProg(Math.round((fi/total)*85)+5, `${fileLabel} — loading…`);
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      const numPages = pdf.numPages;
+
+      setProg(Math.round((fi/total)*85)+8, `${fileLabel} — checking type (${numPages}p)…`);
+      let text = await tryExtractText(pdf, numPages);
+      let usedOCR = false;
+      const meaningfulChars = text.replace(/\s+/g,'').length;
+
+      if (meaningfulChars < numPages * 80) {
+        usedOCR = true; anyOCR = true;
+        progressEl.classList.add('ocr-mode');
+        modeBar.classList.add('show');
+        modeTitle.textContent = '🔍 Tesseract OCR (local only)';
+        modeDesc.textContent = `${fileLabel} is an image PDF — running local Tesseract OCR. Bank Statement mode never uses cloud OCR.`;
+        text = await ocrPdf(pdf, numPages, fi, total);
+      }
+
+      allRawText += `\n\n=== ${file.name} ===\n` + text;
+      const { bank, transactions } = detectAndParse(text);
+      const stmtDate = extractStatementDate(text);
+      // Tag each transaction with bank name, source file, looked-up category, and statement date
+      transactions.forEach(t => { t.bank = bank; t.file = file.name; t.category = categorize(t.description); t.stmtDate = stmtDate; });
+      combinedTransactions = combinedTransactions.concat(transactions);
+
+      setProg(Math.round(((fi+1)/total)*85)+5, `${fileLabel} — ${transactions.length} transactions (${bank})`);
+    }
+
+    debugText.textContent = (debugText.textContent ? debugText.textContent + '\n\n' : '') + allRawText.trim();
+    debugSection.classList.add('show');
+
+    if (!anyOCR) {
+      modeBar.classList.add('show');
+      modeTitle.textContent = '✓ Text PDF(s) detected';
+      modeDesc.textContent = 'Direct text extraction used — fast and accurate.';
+    }
+
+    if (!combinedTransactions.length) {
+      showErr(hasAnyResults()
+        ? 'Could not parse any of the newly added file(s).\n\nExpand "Show extracted raw text" to inspect what was read.'
+        : 'No transactions detected in any of the uploaded files.\n\nExpand "Show extracted raw text" to inspect what was read.');
+    } else {
+      setProg(98, 'Rendering…');
+      allTransactions = allTransactions.concat(combinedTransactions); currentPage = 1;
+      renderPage(); renderSummary(allTransactions);
+      const banks = [...new Set(allTransactions.map(t=>t.bank))];
+      bankDetectedEl.textContent = '✓ Banks: ' + banks.join(', ');
+      ocrDetectedEl.textContent = anyOCR ? '🔍 OCR used on one or more files' : `📄 ${total} file${total>1?'s':''} processed`;
+      results.classList.add('show');
+      setProg(100, `Done — ${combinedTransactions.length} new transaction${combinedTransactions.length>1?'s':''} added (${allTransactions.length} total)`);
+      commitParsedFiles();
+    }
+  }
+}
+
+// ── Text extraction (for text-based PDFs) ─────────────────────────────────────
+async function tryExtractText(pdf, numPages) {
+  let out = '';
+  for (let p = 1; p <= numPages; p++) {
+    setProg(10 + Math.round((p/numPages)*25), `Extracting text page ${p}/${numPages}…`);
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const byY = {};
+    for (const item of content.items) {
+      const y = Math.round(item.transform[5]/2)*2;
+      if (!byY[y]) byY[y]=[];
+      byY[y].push({ x: item.transform[4], str: item.str });
+    }
+    const ys = Object.keys(byY).map(Number).sort((a,b)=>b-a);
+    for (const y of ys) {
+      const row = byY[y].sort((a,b)=>a.x-b.x);
+      out += row.map(i=>i.str).join(' ').replace(/\s+/g,' ').trim()+'\n';
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+// ── Mistral OCR (cloud, optional — used when an API key is set) ──────────────
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function mistralOcrPdf(file, apiKey) {
+  const dataUrl = await fileToDataURL(file);
+  const res = await fetch('https://api.mistral.ai/v1/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'mistral-ocr-latest',
+      document: { type: 'document_url', document_url: dataUrl }
+    })
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(()=>'');
+    throw new Error(`HTTP ${res.status} ${errText.slice(0,150)}`);
+  }
+  const data = await res.json();
+  const markdown = (data.pages || []).map(p => p.markdown || '').join('\n\n');
+  return normalizeMistralMarkdown(markdown);
+}
+
+// Mistral OCR returns Markdown (headings, and tables as "| a | b | c |" rows),
+// not plain space-separated text. Every bank parser's regex expects the latter
+// (e.g. "11 Mar 10 Mar MERCHANT 20.00"), so convert table rows into plain,
+// space-joined lines and strip markdown syntax that would otherwise break them.
+// For some pages Mistral returns raw bounding-box JSON — an array of
+// {box_2d, label, caption} objects — instead of markdown, typically when it
+// treats the whole page as one image/table region. The "caption" field holds
+// an HTML table string. Best-effort only: if the response was truncated
+// (a failure mode seen in practice), only the captured portion is recovered.
+function extractMistralCaptionHtml(raw) {
+  if (!/^\s*\[\s*\{\s*"box_2d"/.test(raw)) return null;
+  const out = [];
+  const re = /"caption"\s*:\s*"/g;
+  let m;
+  while ((m = re.exec(raw))) {
+    let i = m.index + m[0].length, s = '';
+    while (i < raw.length && raw[i] !== '"') {
+      if (raw[i] === '\\' && i + 1 < raw.length) { s += raw[i + 1]; i += 2; }
+      else { s += raw[i]; i++; }
+    }
+    out.push(s);
+  }
+  return out.length ? out.join('\n\n') : null;
+}
+function htmlTableToText(html) {
+  return html
+    .replace(/<\/tr\s*>/gi, '\n')
+    .replace(/<\/t[dh]\s*>/gi, '  ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+function normalizeMistralMarkdown(md) {
+  const captionHtml = extractMistralCaptionHtml(md);
+  const source = captionHtml ? htmlTableToText(captionHtml) : md;
+  const out = [];
+  for (const raw of source.split('\n')) {
+    let line = raw.trim();
+    if (!line) { out.push(''); continue; }
+    // Skip table separator rows: | --- | --- | --- |
+    if (/^\|?[\s:|-]+\|?$/.test(line) && line.includes('-')) continue;
+    if (line.includes('|')) {
+      let s = line;
+      if (s.startsWith('|')) s = s.slice(1);
+      if (s.endsWith('|')) s = s.slice(0, -1);
+      line = s.split('|').map(c => c.trim()).join('  ');
+    }
+    line = line.replace(/^#{1,6}\s+/, '').replace(/\*\*/g, '');
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+// ── OCR (for image/scanned PDFs) ──────────────────────────────────────────────
+async function ocrPdf(pdf, numPages, fileIdx=0, totalFiles=1) {
+  // ── Tesseract worker with tuned config for bank statement accuracy ──────────
+  const worker = await Tesseract.createWorker('eng', 1, {
+    // PSM 6 = assume a single uniform block of text (best for statement columns)
+    // OEM 1 = LSTM neural net (most accurate)
+    logger: m => {
+      if (m.status === 'recognizing text') {
+        const fileBase  = Math.round((fileIdx / totalFiles) * 85) + 5;
+        const fileSlice = Math.round((1 / totalFiles) * 75);
+        const pageBase  = fileBase + Math.round(((currentOcrPage - 1) / numPages) * fileSlice);
+        const pagePct   = Math.round(m.progress * (fileSlice / numPages));
+        setProg(pageBase + pagePct, `OCR page ${currentOcrPage}/${numPages} — ${Math.round(m.progress * 100)}%`);
+      }
+    }
+  });
+
+  // Tesseract parameters tuned for financial statements
+  await worker.setParameters({
+    tessedit_pageseg_mode:  '6',   // PSM_SINGLE_BLOCK — treats page as one text block
+    tessedit_ocr_engine_mode: '1', // OEM_LSTM_ONLY — neural net only, most accurate
+    // Whitelist: all chars that appear in bank statements
+    // (letters, digits, common punctuation, currency symbols)
+    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,()-/*@#&\'$%+:',
+    preserve_interword_spaces: '1',  // keep column spacing for tabular layout
+    user_defined_dpi: '300',         // tell Tesseract our effective DPI
+  });
+
+  let fullText = '';
+  let currentOcrPage = 1;
+
+  for (let p = 1; p <= numPages; p++) {
+    currentOcrPage = p;
+    const fileBase  = Math.round((fileIdx / totalFiles) * 85) + 5;
+    const fileSlice = Math.round((1 / totalFiles) * 75);
+    const pctStart  = fileBase + Math.round(((p - 1) / numPages) * fileSlice);
+    setProg(pctStart, `OCR page ${p}/${numPages} — preprocessing…`);
+
+    // ── Step 1: Render at high scale ────────────────────────────────────────
+    // 300 DPI effective: PDF default is 72 DPI, so scale = 300/72 ≈ 4.17
+    // We use 3.5 as a balance between quality and memory/speed
+    const page     = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 3.5 });
+    const canvas   = document.createElement('canvas');
+    canvas.width   = viewport.width;
+    canvas.height  = viewport.height;
+    const ctx      = canvas.getContext('2d');
+
+    // Render with white background (avoids transparent-to-black artefacts)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // ── Step 2: Image pre-processing for better OCR ──────────────────────────
+    const processed = preprocessForOCR(canvas);
+
+    // ── Step 3: Store preview thumbnail ────────────────────────────────────────
+    const thumb = document.createElement('canvas');
+    const thumbScale = 180 / processed.height;
+    thumb.width  = Math.round(processed.width * thumbScale);
+    thumb.height = 180;
+    thumb.getContext('2d').drawImage(processed, 0, 0, thumb.width, thumb.height);
+    thumb.title = `Page ${p} — click to enlarge`;
+    thumb.style.cursor = 'pointer';
+    thumb.addEventListener('click', () => {
+      const win = window.open('', '_blank');
+      win.document.write('<img src="' + processed.toDataURL() + '" style="max-width:100%;display:block">');
+    });
+    $('ocrPreviewScroll').appendChild(thumb);
+    $('ocrPreview').classList.add('show');
+    debugSection.classList.add('show');
+
+    // ── Step 4: OCR ──────────────────────────────────────────────────────────
+    setProg(pctStart + 2, `OCR page ${p}/${numPages} — recognising…`);
+    const { data } = await worker.recognize(processed);
+    fullText += data.text + '\n';
+  }
+
+  await worker.terminate();
+  return fullText;
+}
+
+// ── Image pre-processing: sharpen, increase contrast, binarise ───────────────
+function preprocessForOCR(srcCanvas) {
+  const w = srcCanvas.width;
+  const h = srcCanvas.height;
+  const dst = document.createElement('canvas');
+  dst.width  = w;
+  dst.height = h;
+  const ctx = dst.getContext('2d');
+
+  // Draw source
+  ctx.drawImage(srcCanvas, 0, 0);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+
+  // ── Pass 1: Convert to greyscale ──────────────────────────────────────────
+  for (let i = 0; i < d.length; i += 4) {
+    // Luminosity-weighted greyscale (perceptual)
+    const grey = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    d[i] = d[i+1] = d[i+2] = grey;
+  }
+
+  // ── Pass 2: Increase contrast (stretch histogram) ─────────────────────────
+  // Find min/max luminance in the page
+  let lo = 255, hi = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] < lo) lo = d[i];
+    if (d[i] > hi) hi = d[i];
+  }
+  const range = hi - lo || 1;
+  for (let i = 0; i < d.length; i += 4) {
+    const stretched = Math.round(((d[i] - lo) / range) * 255);
+    d[i] = d[i+1] = d[i+2] = stretched;
+  }
+
+  // ── Pass 3: Adaptive-style binarisation (Otsu threshold approximation) ────
+  // Build histogram
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < d.length; i += 4) hist[d[i]]++;
+  const total = w * h;
+  let sum = 0;
+  for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t];
+    if (!wB) continue;
+    const wF = total - wB;
+    if (!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB;
+    const mF = (sum - sumB) / wF;
+    const varBetween = wB * wF * (mB - mF) ** 2;
+    if (varBetween > maxVar) { maxVar = varBetween; thresh = t; }
+  }
+  // Apply binarisation with slight softening (not hard 0/255 to help Tesseract)
+  for (let i = 0; i < d.length; i += 4) {
+    const v = d[i] < thresh ? 0 : 255;
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return dst;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ELECTRICITY & WATER BILL MODE — Geneco electricity + SP gas/water/refuse
+// ═══════════════════════════════════════════════════════════════════════
+async function extractPagesBill(pdf) {
+  const pages = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    pages.push(content.items.map(it => it.str).join(' ').replace(/[ \t]+/g, ' '));
+  }
+  return pages;
+}
+
+async function mistralOcrPagesBill(file, apiKey) {
+  const dataUrl = await fileToDataURL(file);
+  const res = await fetch('https://api.mistral.ai/v1/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'mistral-ocr-latest',
+      document: { type: 'document_url', document_url: dataUrl }
+    })
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${errText.slice(0, 150)}`);
+  }
+  const data = await res.json();
+  return (data.pages || []).map(p => normalizeMistralMarkdown(p.markdown || ''));
+}
+
+function toNum(s) { return s == null ? null : parseFloat(String(s).replace(/[,$]/g, '')); }
+function between(text, startAnchor, endAnchor) {
+  const s = text.indexOf(startAnchor);
+  if (s === -1) return null;
+  const e = text.indexOf(endAnchor, s + startAnchor.length);
+  if (e === -1) return null;
+  return text.slice(s + startAnchor.length, e);
+}
+function lastDecimal(str) {
+  if (!str) return null;
+  const ms = [...str.matchAll(/-?\$?([\d,]+\.\d{2})(?!\d)/g)];
+  return ms.length ? toNum(ms[ms.length - 1][1]) : null;
+}
+// Rate columns (e.g. 0.2192 S$/kWh) are 1-digit-then-4-decimals numbers. When a bill
+// has a corrected prior-period tier followed by the current tier (two rates in the
+// block), the current tier's rate is always the last one in reading order.
+function lastRate(str) {
+  if (!str) return null;
+  const ms = [...str.matchAll(/(?<!\d)(\d\.\d{3,4})(?!\d)/g)];
+  return ms.length ? toNum(ms[ms.length - 1][1]) : null;
+}
+function parseMonthYear(text) {
+  const m = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\s+Bill\b/);
+  if (!m) return null;
+  const monthName = m[1], year = +m[2];
+  return { monthName, year, key: monthName + '-' + year, label: monthName + ' ' + year, date: new Date(`${monthName} 1, ${year}`) };
+}
+
+function detectBillType(text) {
+  if (/Gas Services by City Energy|Water Services by Public Utilities Board/i.test(text)) return 'sp';
+  if (/Geneco|Seraya Energy/i.test(text)) return 'geneco';
+  return 'unknown';
+}
+
+// Geneco electricity bill. "Elec ($)" = CURRENT CHARGES (inclusive of GST).
+function parseGeneco(text) {
+  const monthYear = parseMonthYear(text);
+  const kwhMatch = text.match(/Electricity Consumption[^)]*\)\s*([\d,.]+)/i);
+  const kwh = kwhMatch ? toNum(kwhMatch[1]) : null;
+
+  let rate = null;
+  const rateBlock = between(text, 'Rate', 'SUB TOTAL');
+  if (rateBlock) {
+    const rm = rateBlock.match(/(?<!\d)(\d\.\d{3,4})(?!\d)/);
+    if (rm) rate = toNum(rm[1]);
+  }
+
+  const subtotalMatch = text.match(/Taxable Charges\s*\(Goods and Services Tax[^)]*\)\s*([\d,.]+)/i);
+  const subtotal = subtotalMatch ? toNum(subtotalMatch[1]) : null;
+  if (rate == null && subtotal != null && kwh) rate = +(subtotal / kwh).toFixed(4);
+
+  const gstMatch = text.match(/Goods and Services Tax\s*\(\d+%\)\s*([\d,.]+)/i);
+  const gst = gstMatch ? toNum(gstMatch[1]) : null;
+
+  const currentChargesMatch = text.match(/CURRENT CHARGES\s*(?:\([^)]*\))?\s*([\d,.]+)/);
+  const currentCharges = currentChargesMatch ? toNum(currentChargesMatch[1]) : (subtotal != null && gst != null ? +(subtotal + gst).toFixed(2) : null);
+
+  return { type: 'geneco', monthYear, kwh, rate, subtotal, gst, currentCharges };
+}
+
+function parseSP(pages, fullText) {
+  const monthYear = parseMonthYear(fullText);
+  const gasKwhMatch = fullText.match(/Usage:\s*([\d,.]+)\s*kWh/i);
+  const gasKwh = gasKwhMatch ? toNum(gasKwhMatch[1]) : null;
+  const waterCuMMatch = fullText.match(/Usage:\s*([\d,.]+)\s*Cu\s*M/i);
+  const waterCuM = waterCuMMatch ? toNum(waterCuMMatch[1]) : null;
+
+  const breakdownPage = pages.find(p => /Breakdown of Current Charges/i.test(p)) || fullText;
+
+  const gasBlock = between(breakdownPage, 'Gas Services', 'Water Services');
+  const gasAmount = lastDecimal(gasBlock);
+  const gasRate = lastRate(gasBlock);
+  const waterAmount = lastDecimal(between(breakdownPage, 'Water Services', 'Refuse Removal'));
+  const refuseAmount = lastDecimal(between(breakdownPage, 'Refuse Removal', 'Subtotal'));
+  const subtotal = lastDecimal(between(breakdownPage, 'Subtotal', 'GST'));
+  const gst = lastDecimal(between(breakdownPage, 'GST', 'Current Charges'));
+
+  const currentChargesMatch = fullText.match(/Current Charges:?\s*\(Inclusive of GST\)\s*\$?([\d,.]+)/i);
+  const currentCharges = currentChargesMatch ? toNum(currentChargesMatch[1]) : (subtotal != null && gst != null ? +(subtotal + gst).toFixed(2) : null);
+
+  return { type: 'sp', monthYear, gasKwh, gasAmount, gasRate, waterCuM, waterAmount, refuseAmount, subtotal, gst, currentCharges };
+}
+
+// Combine geneco + sp bills into monthly rows
+function combineBills(parsedBills) {
+  const byKey = {};
+  for (const b of parsedBills) {
+    if (!b.monthYear) continue;
+    const k = b.monthYear.key;
+    if (!byKey[k]) byKey[k] = { key: k, label: b.monthYear.label, date: b.monthYear.date, geneco: null, sp: null, files: [] };
+    byKey[k][b.type] = b;
+    byKey[k].files.push(b.sourceFile);
+  }
+  return Object.values(byKey).sort((a, b) => a.date - b.date);
+}
+
+async function runBillParse() {
+  const total = selectedFiles.length;
+
+  // Phase 1 — read every file and check which ones need OCR at all, without
+  // actually OCR'ing anything yet (so we know the full cloud-OCR candidate
+  // list before asking once, instead of prompting file-by-file).
+  const fileStates = [];
+  for (let fi = 0; fi < total; fi++) {
+    const file = selectedFiles[fi];
+    const fileLabel = `[${fi + 1}/${total}] ${file.name}`;
+    setProg(Math.round((fi / total) * 30) + 5, `${fileLabel} — reading…`);
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const pages = await extractPagesBill(pdf);
+    const fullText = pages.join('\n\n');
+    const needsOCR = fullText.replace(/\s+/g, '').length < pdf.numPages * 80;
+    fileStates.push({ file, fileLabel, pdf, pages, fullText, needsOCR });
+  }
+
+  // Phase 2 — ask which of the scanned files (if any) may go to Mistral.
+  const ocrNeeded = fileStates.filter(s => s.needsOCR);
+  let mistralSet = new Set();
+  if (ocrNeeded.length && getMistralKey()) {
+    progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+    modeTitle.textContent = '⚠️ Confirm cloud OCR'; modeDesc.textContent = 'Waiting for your confirmation…';
+    const approved = await confirmMistralFileList(
+      ocrNeeded.map(s => s.fileLabel),
+      "These bills need OCR to read. Sending one to Mistral's cloud OCR means the name, address and account details on it leave your browser."
+    );
+    mistralSet = new Set(approved);
+  }
+
+  // Phase 3 — OCR (local or Mistral, per the user's choice) and parse.
+  const parsedBills = [];
+  let allRawText = '';
+  for (let fi = 0; fi < fileStates.length; fi++) {
+    const { file, fileLabel, pdf, needsOCR } = fileStates[fi];
+    let { pages, fullText } = fileStates[fi];
+    let usedOCR = false;
+
+    if (needsOCR) {
+      usedOCR = true;
+      progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+      if (mistralSet.has(fileLabel)) {
+        modeTitle.textContent = '☁️ Mistral OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — sending to Mistral OCR (cloud)…`;
+        try {
+          pages = await mistralOcrPagesBill(file, getMistralKey());
+        } catch (err) {
+          modeDesc.textContent = `${fileLabel}: Mistral OCR failed (${err.message}) — falling back to local Tesseract OCR…`;
+          const ocrText = await ocrPdf(pdf, pdf.numPages, fi, fileStates.length);
+          pages = [ocrText];
+        }
+      } else {
+        modeTitle.textContent = '🔍 Tesseract OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — running local Tesseract OCR…`;
+        const ocrText = await ocrPdf(pdf, pdf.numPages, fi, fileStates.length);
+        pages = [ocrText];
+      }
+      fullText = pages.join('\n\n');
+    }
+
+    allRawText += `\n\n=== ${file.name}${usedOCR ? ' (OCR)' : ''} ===\n` + fullText;
+
+    const type = detectBillType(fullText);
+    let bill = null;
+    if (type === 'geneco') bill = parseGeneco(fullText);
+    else if (type === 'sp') bill = parseSP(pages, fullText);
+
+    if (!bill || !bill.monthYear) {
+      showWarn(`Could not parse "${file.name}" (unrecognized bill type or missing month/year).`);
+      continue;
+    }
+    bill.sourceFile = file.name;
+    parsedBills.push(bill);
+  }
+
+  debugText.textContent = (debugText.textContent ? debugText.textContent + '\n\n' : '') + allRawText.trim();
+  debugSection.classList.add('show');
+
+  if (!parsedBills.length) {
+    showErr(hasAnyResults()
+      ? 'Could not parse any of the newly added file(s). Expand "Show extracted raw text" to inspect what was read.'
+      : 'No bills could be parsed. Expand "Show extracted raw text" to inspect what was read.');
+  } else {
+    allParsedBills = allParsedBills.concat(parsedBills);
+    combinedRows = combineBills(allParsedBills);
+    const missing = combinedRows.filter(r => !r.geneco || !r.sp)
+      .map(r => `${r.label}: missing ${!r.geneco ? 'electricity (Geneco)' : ''}${!r.geneco && !r.sp ? ' & ' : ''}${!r.sp ? 'gas/water (SP)' : ''} bill`);
+    if (missing.length) showWarn(missing.join('\n'));
+    renderBillResults(combinedRows);
+    results.classList.add('show');
+    setProg(100, `Done — ${parsedBills.length} new file(s) parsed (${combinedRows.length} month(s) total)`);
+    commitParsedFiles();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PAY SLIP MODE — auto-detects "Legacy" tabular format vs "UHP" system-generated
+// card format, extracts every field into one flat record per pay slip.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Reconstructs each visual row as one line, inserting extra spaces where the
+// x-gap between items is wide (mimics `pdftotext -layout`), so multi-column
+// rows keep their columns visually separated. Also returns the raw per-row
+// item list (with x positions) so two-column fields can be split precisely.
+// Both known pay slip layouts turn out to be scanned/image PDFs in practice
+// (no PDF text layer at all — confirmed via getOperatorList: image ops only,
+// no text-showing ops), so OCR is the realistic path for real files. Parsing
+// therefore works purely off reconstructed TEXT LINES, splitting columns by
+// character offset (approximating x-position via preserved whitespace) rather
+// than true PDF text-item coordinates — this way the exact same logic applies
+// whether the text came from a genuine text layer or from Tesseract/Mistral OCR.
+
+// Reconstructs each visual row as one line, inserting extra spaces where the
+// x-gap between items is wide (mimics `pdftotext -layout`), so multi-column
+// rows keep their columns visually separated in the resulting plain text.
+async function extractLayoutText(pdf) {
+  let text = '';
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const byY = {};
+    for (const item of content.items) {
+      const y = Math.round(item.transform[5] / 2) * 2;
+      if (!byY[y]) byY[y] = [];
+      byY[y].push({ x: item.transform[4], str: item.str, w: item.width || item.str.length * 5 });
+    }
+    const ys = Object.keys(byY).map(Number).sort((a, b) => b - a);
+    for (const y of ys) {
+      const rowItems = byY[y].sort((a, b) => a.x - b.x);
+      let line = '', prevEnd = null;
+      for (const it of rowItems) {
+        if (prevEnd != null) {
+          const gap = it.x - prevEnd;
+          line += ' '.repeat(gap > 18 ? Math.min(Math.round(gap / 5), 40) : 1);
+        }
+        line += it.str;
+        prevEnd = it.x + (it.w || it.str.length * 5);
+      }
+      text += line + '\n';
+    }
+  }
+  return text;
+}
+
+// Scans a line for every "Label:" occurrence and takes each value as the text
+// up to the NEXT "Label:" (or end of line) — robust regardless of how wide the
+// label-value gap is, since it's anchored on the colon rather than a fixed
+// space-run threshold (a single-line row can have 2-3 "Label: value" pairs
+// side by side with uneven spacing, e.g. the legacy pay slip's header block).
+function parseColonPairs(line) {
+  // Label must sit right at line-start or after a 2+ space gap (so it can't
+  // start mid-value), and is capped at 3 single-space-joined words — otherwise
+  // a non-greedy match would swallow the previous field's whole value plus its
+  // gap just to reach the next colon (e.g. "SITE    Date" as one "label").
+  const labelRe = /(?:^|\s{2,})([A-Za-z][A-Za-z\/'.]{0,20}(?:\s[A-Za-z][A-Za-z\/'.]{0,20}){0,2}):/g;
+  const matches = [...line.matchAll(labelRe)];
+  const pairs = [];
+  for (let i = 0; i < matches.length; i++) {
+    const label = matches[i][1].trim();
+    const valueStart = matches[i].index + matches[i][0].length;
+    const valueEnd = i + 1 < matches.length ? matches[i + 1].index : line.length;
+    let value = line.slice(valueStart, valueEnd);
+    const trimmed = value.slice(value.length - value.trimStart().length);
+    // Cut at the next big gap WITHIN the value (a different field starting
+    // further along the row), but only after skipping the label's own
+    // leading gap — otherwise a wide label→value gap gets mistaken for one.
+    const gapCut = trimmed.search(/\s{5,}/);
+    value = gapCut === -1 ? trimmed : trimmed.slice(0, gapCut);
+    pairs.push([label, value.trim()]);
+  }
+  return pairs;
+}
+
+// Splits "Basic Pay 5,050.00 1.00 5,050.00" into label="Basic Pay" (everything
+// before the FIRST number) and amount=5050.00 (the LAST number = the extended
+// amount column; the middle numbers, if any, are rate/qty and are discarded).
+function splitLabelAmount(str) {
+  const nums = [...str.matchAll(/-?[\d,]+\.\d{2}/g)];
+  if (!nums.length) return { label: str.trim(), amount: null };
+  const label = str.slice(0, nums[0].index).trim().replace(/[\s.]+$/, '');
+  return { label, amount: toNum(nums[nums.length - 1][0]) };
+}
+
+// Several legacy pay slip totals sit side-by-side on the same physical row
+// (e.g. "Gross Salary 10,100.00     Total Deductions 2,023.00"), so grabbing
+// the LAST number on the matched line would pick up the neighbouring field's
+// value. Instead, take the FIRST number after the label, stopping at the next
+// big column gap (3+ spaces) so a same-row neighbour field can't leak in.
+// Finds an earnings/deductions line item by label pattern (e.g. "Basic Pay",
+// "CDAC" matching both UHP's "CDAC" and legacy's "CDAC Fund").
+function findLabelAmount(list, re) {
+  const item = (list || []).find(x => re.test(x.label));
+  return item ? item.amount : null;
+}
+
+function numAfterLabel(text, labelRe) {
+  for (const line of text.split('\n')) {
+    const m = labelRe.exec(line);
+    if (!m) continue;
+    const rest = line.slice(m.index);
+    const gapCut = rest.search(/\s{3,}/);
+    const segment = gapCut === -1 ? rest : rest.slice(0, gapCut);
+    const nums = [...segment.matchAll(/-?[\d,]+\.\d{2}/g)];
+    if (nums.length) return toNum(nums[0][0]);
+    const numsAll = [...rest.matchAll(/-?[\d,]+\.\d{2}/g)];
+    return numsAll.length ? toNum(numsAll[0][0]) : null;
+  }
+  return null;
+}
+
+// Like numAfterLabel, but for the legacy pay slip's side-by-side "Earnings |
+// Deductions" detail rows, where TWO unrelated fields can share one physical
+// line (e.g. "Basic Pay 5,050.00 1.00 5,050.00  CPF Recov' - Ord. 1,010.00").
+// numAfterLabel's "fall back past the gap" behaviour is unsafe here — it can
+// grab a neighbouring field's number. This instead accepts the first number
+// after the label ONLY if nothing that looks like a real word (a different
+// field's label) sits between the label and that number; otherwise the row's
+// own value is genuinely blank (e.g. "Bonus" with nothing filled in that
+// month) and the number further along belongs to a different field.
+function numAfterLabelStrict(text, labelRe) {
+  for (const line of text.split('\n')) {
+    const m = labelRe.exec(line);
+    if (!m) continue;
+    const rest = line.slice(m.index + m[0].length);
+    const numMatch = rest.match(/-?[\d,]+\.\d{2}/);
+    if (!numMatch) return null;
+    const before = rest.slice(0, numMatch.index);
+    if (/[A-Za-z]{2,}/.test(before)) return null;
+    return toNum(numMatch[0]);
+  }
+  return null;
+}
+
+// Like numAfterLabelStrict, but returns the 3rd number on the label's row
+// (the extended amount) instead of the 1st (a rate/qty column) — needed for
+// rows like "Overtime(1.5X)   5.00   33.00   165.00" where the first number
+// is the hourly rate, not the amount earned. Every earnings row is always
+// label/rate/qty/extended (3 numbers), so the extended amount is capped at
+// the 3rd rather than taken as "whatever's last": OCR sometimes fails to fit
+// a deduction row's own extended amount on its line and wraps it onto the
+// following earnings row instead (e.g. "Overtime(1.5x)  5.00  33.00  165.00
+// 1.50" — that trailing 1.50 is CDAC Fund's amount, not Overtime's), and
+// blindly taking the last number would grab that leaked 4th value. Also
+// stops before any neighbouring field's label text sharing the same row
+// (e.g. "Allowance 400.00 1.00 400.00  CDAC Fund 1.50 1.00").
+function numAfterLabelLast(text, labelRe) {
+  for (const line of text.split('\n')) {
+    const m = labelRe.exec(line);
+    if (!m) continue;
+    let rest = line.slice(m.index + m[0].length);
+    const nextLabel = rest.search(/[A-Za-z]{2,}/);
+    if (nextLabel !== -1) rest = rest.slice(0, nextLabel);
+    const nums = [...rest.matchAll(/-?[\d,]+\.\d{2}/g)];
+    if (!nums.length) return null;
+    return toNum(nums[Math.min(nums.length, 3) - 1][0]);
+  }
+  return null;
+}
+
+function findLineIdx(lines, re, fromIdx = 0) {
+  for (let i = fromIdx; i < lines.length; i++) if (re.test(lines[i])) return i;
+  return -1;
+}
+function findHeaderLineIdx(lines, re1, re2, fromIdx = 0) {
+  for (let i = fromIdx; i < lines.length; i++) if (re1.test(lines[i]) && re2.test(lines[i])) return i;
+  return -1;
+}
+function nextNonEmpty(lines, fromIdx) {
+  for (let i = fromIdx; i < lines.length; i++) if (lines[i].trim()) return i;
+  return -1;
+}
+// Extracts a "Label1 / Label2" field pair. Mistral OCR emits this UHP card
+// layout in two different shapes for the same visual row — sometimes both
+// labels share one line with both values on the line below ("combined"),
+// sometimes each label/value is its own line ("stacked") — and switches
+// between the two unpredictably even within a single document. This handles
+// both without assuming which one a given file will use.
+// Returns { left, right, endIdx } — endIdx is the last line consumed, so
+// callers can keep scanning from endIdx + 1.
+function extractPair(lines, label1Re, label2Re, fromIdx = 0) {
+  const idx1 = findLineIdx(lines, label1Re, fromIdx);
+  if (idx1 < 0) return { left: null, right: null, endIdx: fromIdx };
+  if (label2Re.test(lines[idx1])) {
+    const vIdx = nextNonEmpty(lines, idx1 + 1);
+    if (vIdx < 0) return { left: null, right: null, endIdx: idx1 };
+    const [left, right] = splitAtLabel(lines[idx1], lines[vIdx], label2Re);
+    return { left, right, endIdx: vIdx };
+  }
+  const v1Idx = nextNonEmpty(lines, idx1 + 1);
+  if (v1Idx < 0) return { left: null, right: null, endIdx: idx1 };
+  const left = lines[v1Idx].trim() || null;
+  const idx2 = findLineIdx(lines, label2Re, v1Idx + 1);
+  if (idx2 < 0) return { left, right: null, endIdx: v1Idx };
+  const v2Idx = nextNonEmpty(lines, idx2 + 1);
+  const right = v2Idx >= 0 ? (lines[v2Idx].trim() || null) : null;
+  return { left, right, endIdx: v2Idx >= 0 ? v2Idx : idx2 };
+}
+// Scans [start, end) for earnings/deductions line items, handling both a
+// "LABEL ... SGD amount" combined line and a stacked "LABEL" line followed
+// by a separate "SGD amount" line (see extractPair for why both occur).
+function scanLineItems(lines, start, end) {
+  const items = [];
+  for (let i = start; i < end; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const combined = line.match(/^(.+?)\s+SGD\s*(-?[\d,]+\.\d{2})\s*$/i);
+    if (combined) { items.push({ label: combined[1].trim(), amount: toNum(combined[2]) }); continue; }
+    if (/SGD/i.test(line)) continue;
+    const vIdx = nextNonEmpty(lines, i + 1);
+    if (vIdx < 0 || vIdx >= end) continue;
+    const stacked = lines[vIdx].trim().match(/^SGD\s*(-?[\d,]+\.\d{2})\s*$/i);
+    if (stacked) { items.push({ label: line, amount: toNum(stacked[1]) }); i = vIdx; }
+  }
+  return items;
+}
+// Splits a two-column value line (e.g. "MECHANICAL     PROJECT MANAGER 1")
+// at its own internal column gap (2+ spaces), rather than mirroring the
+// header label's character offset — label and value text rarely share the
+// same width (different fonts, or Mistral's markdown-table normalization,
+// which pads every cell gap to a fixed 2 spaces regardless of cell content).
+// Falls back to the header-offset heuristic if the value line has no
+// detectable gap (e.g. the second column is blank on this pay slip).
+function splitAtLabel(headerRaw, valueRaw, label2Re) {
+  const gap = /\s{2,}/.exec(valueRaw);
+  if (gap) {
+    const left = valueRaw.slice(0, gap.index).trim();
+    const right = valueRaw.slice(gap.index + gap[0].length).trim();
+    if (left && right) return [left, right];
+  }
+  const m = label2Re.exec(headerRaw);
+  if (!m) return [valueRaw.trim() || null, null];
+  const pos = Math.min(m.index, valueRaw.length);
+  const left = valueRaw.slice(0, pos).trim();
+  const right = valueRaw.slice(pos).trim();
+  return [left || null, right || null];
+}
+function valueUntil(lines, startIdx, stopRe) {
+  const out = [];
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (stopRe.test(line)) break;
+    out.push(line);
+  }
+  return out.join(' ').trim();
+}
+// Combines any same-row value with wrapped continuation lines below it (e.g.
+// "Bank account: DBS / POSB BANK" followed by a second line "- 1205834477").
+function fieldValue(lines, labelRe, stopRe) {
+  const idx = findLineIdx(lines, labelRe);
+  if (idx < 0) return '';
+  const sameRow = lines[idx].replace(labelRe, '').trim();
+  const continuation = valueUntil(lines, idx, stopRe);
+  return [sameRow, continuation].filter(Boolean).join(' ').trim();
+}
+
+function detectPayslipFormat(text) {
+  if (/SALARY ADVICE FOR THE PERIOD/i.test(text)) return 'legacy';
+  if (/SYSTEM GENERATED PAYSLIP|Nett Wages/i.test(text)) return 'uhp';
+  return 'unknown';
+}
+
+// Formats a legacy "dd/mm/yy-dd/mm/yy" period as "MON-YY" when it spans a
+// full calendar month (from the 1st to the last day of that month); otherwise
+// keeps the original date range as-is (partial-month periods).
+const MONTH_ABBR = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+function formatLegacyPeriod(fromStr, toStr) {
+  if (!fromStr || !toStr) return fromStr || toStr || '';
+  const fm = fromStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  const tm = toStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (fm && tm) {
+    const fDay = +fm[1], fMonth = +fm[2], fYear = +fm[3];
+    const tDay = +tm[1], tMonth = +tm[2], tYear = +tm[3];
+    const fullYear = fYear < 100 ? 2000 + fYear : fYear;
+    const lastDayOfMonth = new Date(fullYear, fMonth, 0).getDate();
+    if (fDay === 1 && fMonth === tMonth && fYear === tYear && tDay === lastDayOfMonth) {
+      return `${MONTH_ABBR[fMonth - 1]}-${fm[3]}`;
+    }
+  }
+  return `${fromStr}-${toStr}`;
+}
+
+// ── Legacy tabular "Salary Advice" format (e.g. 2023-era UHP pay slips) ──────
+function parseLegacyPayslip(text) {
+  const lines = text.split('\n');
+  const map = {};
+  for (const line of lines) for (const [k, v] of parseColonPairs(line)) if (v) map[k] = v;
+
+  // Some scans have the whole label/value block reconstructed one row out of
+  // sync (each label ends up holding the PREVIOUS row's value) — a Name value
+  // that's actually a date is the unambiguous tell, since a real name never
+  // matches a date pattern. When detected, Name/Job Title are recovered from
+  // the field one row further down the same two columns, which is where the
+  // true value consistently lands regardless of exactly which row the shift
+  // started on.
+  const looksLikeDate = v => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test((v || '').trim());
+  const shifted = looksLikeDate(map['Name']);
+  const name = shifted ? (map['Employee No'] || '') : (map['Name'] || '');
+  const designation = shifted ? (map['Pay Period'] || '') : (map['Job Title'] || '');
+
+  const periodMatch = text.match(/FOR THE PERIOD OF\s*([\d\/]+)\s*-\s*([\d\/]+)/i);
+
+  const earnIdx = findLineIdx(lines, /^Earnings\b/i);
+  const grossIdx = earnIdx >= 0 ? findLineIdx(lines, /Gross Salary/i, earnIdx + 1) : -1;
+  let earnings = [], deductions = [];
+  if (earnIdx >= 0 && grossIdx > earnIdx) {
+    const dedMatch = /Deductions/i.exec(lines[earnIdx]);
+    if (dedMatch) {
+      const dedColStart = dedMatch.index;
+      for (let i = earnIdx + 1; i < grossIdx; i++) {
+        const raw = lines[i];
+        if (!raw.trim()) continue;
+        const left = raw.slice(0, dedColStart), right = raw.slice(dedColStart);
+        if (left.trim()) { const r = splitLabelAmount(left); if (r.label && r.amount != null) earnings.push(r); }
+        if (right.trim()) { const r = splitLabelAmount(right); if (r.label && r.amount != null) deductions.push(r); }
+      }
+    }
+  }
+
+  // CPF Recov' - Ord. and CPF Recov' - Add. are both employee CPF deductions
+  // (Ordinary + Additional wage CPF); the displayed field is their sum, when
+  // either is present. basicPay/cdac/bonus use the same label-anchored,
+  // gap-independent lookup rather than the dedColStart-sliced earnings/
+  // deductions arrays above, which mis-slice whenever a row's earnings-side
+  // numbers don't happen to end exactly at the header's "Deductions" column
+  // offset (the same character-offset-mirroring problem fixed for the UHP
+  // format's splitAtLabel, just showing up here in the legacy layout instead).
+  const cpfOrd = numAfterLabelStrict(text, /CPF Recov.*?Ord\.?/i);
+  const cpfAdd = numAfterLabelStrict(text, /CPF Recov.*?Add\.?/i);
+  // "TT DEPOSITED: $<netPay>+..." is a more reliable net-pay source than the
+  // "NET SALARY" line — on row-shifted scans, NET SALARY's own slot can hold
+  // a neighbouring field's value while TT DEPOSITED stays correct.
+  const ttDeposited = text.match(/TT DEPOSITED:\s*\$\s*([\d,]+(?:\.\d{1,2})?)/i);
+
+  return {
+    format: 'Legacy',
+    name, employeeNo: map['Employee No'] || '',
+    department: map['Department'] || '', designation,
+    company: map['Company'] || '', payPeriodType: map['Pay Period'] || '',
+    payPeriodDisplay: periodMatch ? formatLegacyPeriod(periodMatch[1], periodMatch[2]) : '',
+    payMode: map['Pay Mode'] || '', issueDate: map['Date'] || '',
+    periodFrom: periodMatch ? periodMatch[1] : '', periodTo: periodMatch ? periodMatch[2] : '',
+    earnings, deductions,
+    basicPay: numAfterLabelStrict(text, /^Basic Pay/i),
+    allowance: numAfterLabelLast(text, /^Allowance/i),
+    overtime: numAfterLabelLast(text, /^Overtime/i),
+    bonus: numAfterLabelStrict(text, /^Bonus\b/i),
+    employeeCPF: (cpfOrd != null || cpfAdd != null) ? (cpfOrd || 0) + (cpfAdd || 0) : null,
+    cdac: numAfterLabelStrict(text, /CDAC(\s+Fund)?/i),
+    grossPay: numAfterLabel(text, /Gross Salary/i),
+    totalDeductions: numAfterLabel(text, /Total Deductions/i),
+    netPay: ttDeposited ? toNum(ttDeposited[1]) : numAfterLabel(text, /NET SALARY/i),
+    employerCPF: numAfterLabel(text, /EMPLOYER'?S CPF CONTRIBUTION/i),
+    skillDevLevy: numAfterLabel(text, /SKILL DEVELOPMENT LEVY/i),
+    ytdEmployerCPF: numAfterLabel(text, /YTD EMPLOYER CPF CONTRIBUTION/i),
+    ytdEmployerCPFRecoverable: numAfterLabel(text, /YTD EMPLOYER CPF RECOVERABLE/i),
+  };
+}
+
+// ── UHP system-generated card format (e.g. 2026-era UHP pay slips) ──────────
+function parseUHPPayslip(text) {
+  const lines = text.split('\n');
+  const numIn = s => s ? toNum((s.match(/-?[\d,]+\.\d{2}/) || [])[0]) : null;
+
+  const nameIdx = lines.findIndex(l => /\([A-Za-z0-9]+\)\s*$/.test(l.trim()));
+  const nameLine = nameIdx >= 0 ? lines[nameIdx].trim() : '';
+  const nm = nameLine.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  const name = nm ? nm[1].trim() : nameLine;
+  const employeeNo = nm ? nm[2].trim() : '';
+
+  // Each pair below is searched independently from the top of the document
+  // rather than chained off the previous field's position — Mistral OCR
+  // doesn't always emit these sections in a fixed order (e.g. some pay
+  // slips place Designation after Pay Period instead of before it), so
+  // chaining would make one reordered field cascade into losing the rest.
+  // Every label here is unique within a pay slip, so an unscoped search
+  // carries no risk of matching the wrong occurrence.
+  const dept = extractPair(lines, /^Department\b/i, /Designation/i);
+  const department = dept.left, designation = dept.right;
+
+  const companyIdx = findLineIdx(lines, /^Company Name$/i);
+  const company = companyIdx >= 0 ? valueUntil(lines, companyIdx, /Pay Period/i) : '';
+
+  const period = extractPair(lines, /^Pay Period\b/i, /Date Of Payment/i);
+  const payPeriod = period.left, dateOfPayment = period.right;
+
+  // Earnings/deductions line items can't be reliably bounded by "right after
+  // Date Of Payment" (same reordering risk), so scan from just after the
+  // name line up to "Nett Wages" instead — none of the header fields above
+  // match the item patterns scanLineItems looks for, so this wide range is safe.
+  const itemsStart = nameIdx >= 0 ? nameIdx + 1 : 0;
+  const nettLineIdx = findLineIdx(lines, /Nett Wages/i, itemsStart);
+  const lineItems = nettLineIdx >= 0 ? scanLineItems(lines, itemsStart, nettLineIdx) : [];
+
+  const wages = extractPair(lines, /Nett Wages/i, /Gross Wages/i);
+  const nettStr = wages.left, grossStr = wages.right;
+
+  const cpf = extractPair(lines, /CPF Wages/i, /Employer CPF/i);
+  const cpfWagesStr = cpf.left, employerCPFStr = cpf.right;
+
+  const totalCPFIdx = findLineIdx(lines, /^Total CPF\s*$/i);
+  let totalCPF = null;
+  if (totalCPFIdx >= 0) {
+    const vIdx = nextNonEmpty(lines, totalCPFIdx + 1);
+    totalCPF = vIdx >= 0 ? numIn(lines[vIdx]) : null;
+  }
+
+  const bal = extractPair(lines, /AL\/?BAL/i, /ML\/?BAL/i);
+  const alBalStr = bal.left, mlBalStr = bal.right;
+
+  const salaryCreditedTo = fieldValue(lines, /^Salary Credited To/i, /Bank account/i);
+  const bankAccount = fieldValue(lines, /^Bank account/i, /Messages/i);
+
+  const uhpEarnings = lineItems.filter(li => li.amount != null && li.amount >= 0);
+  const uhpDeductions = lineItems.filter(li => li.amount != null && li.amount < 0)
+    .map(li => ({ label: li.label, amount: Math.abs(li.amount) }));
+
+  return {
+    format: 'UHP',
+    name, employeeNo, department: department || '', designation: designation || '',
+    company, payPeriodType: payPeriod || '',
+    // UHP's raw value is like "END-JUN 2026" — drop the "END-" prefix for display.
+    payPeriodDisplay: (payPeriod || '').replace(/^END-/i, ''),
+    issueDate: dateOfPayment || '',
+    payMode: salaryCreditedTo || '', bankAccount,
+    earnings: uhpEarnings, deductions: uhpDeductions,
+    basicPay: findLabelAmount(uhpEarnings, /basic pay/i),
+    allowance: findLabelAmount(uhpEarnings, /allowance/i),
+    overtime: findLabelAmount(uhpEarnings, /overtime/i),
+    bonus: findLabelAmount(uhpEarnings, /bonus/i),
+    employeeCPF: findLabelAmount(uhpDeductions, /EMPLOYEE CPF/i),
+    cdac: findLabelAmount(uhpDeductions, /CDAC/i),
+    grossPay: numIn(grossStr), netPay: numIn(nettStr),
+    employerCPF: numIn(employerCPFStr), cpfWages: numIn(cpfWagesStr), totalCPF,
+    alBal: numIn(alBalStr), mlBal: numIn(mlBalStr)
+  };
+}
+
+async function runPayslipParse() {
+  const total = selectedFiles.length;
+
+  // Phase 1 — read every file and check which ones need OCR at all, without
+  // actually OCR'ing anything yet.
+  const fileStates = [];
+  for (let fi = 0; fi < total; fi++) {
+    const file = selectedFiles[fi];
+    const fileLabel = `[${fi + 1}/${total}] ${file.name}`;
+    setProg(Math.round((fi / total) * 30) + 5, `${fileLabel} — loading…`);
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const text = await extractLayoutText(pdf);
+    const needsOCR = text.replace(/\s+/g, '').length < pdf.numPages * 80;
+    fileStates.push({ file, fileLabel, pdf, text, needsOCR });
+  }
+
+  // Phase 2 — ask which of the scanned files (if any) may go to Mistral.
+  const ocrNeeded = fileStates.filter(s => s.needsOCR);
+  let mistralSet = new Set();
+  if (ocrNeeded.length && getMistralKey()) {
+    progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+    modeTitle.textContent = '⚠️ Confirm cloud OCR'; modeDesc.textContent = 'Waiting for your confirmation…';
+    const approved = await confirmMistralFileList(
+      ocrNeeded.map(s => s.fileLabel),
+      "These pay slips need OCR to read. Sending one to Mistral's cloud OCR means the salary and personal details on it leave your browser."
+    );
+    mistralSet = new Set(approved);
+  }
+
+  // Phase 3 — OCR (local or Mistral, per the user's choice) and parse.
+  const parsed = [];
+  let allRawText = '';
+  for (let fi = 0; fi < fileStates.length; fi++) {
+    const { file, fileLabel, pdf, needsOCR } = fileStates[fi];
+    let { text } = fileStates[fi];
+    let usedOCR = false;
+    const numPages = pdf.numPages;
+
+    if (needsOCR) {
+      usedOCR = true;
+      progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+      let ocrText = '';
+      if (mistralSet.has(fileLabel)) {
+        modeTitle.textContent = '☁️ Mistral OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — sending to Mistral OCR (cloud)…`;
+        try { ocrText = await mistralOcrPdf(file, getMistralKey()); }
+        catch (err) {
+          modeDesc.textContent = `${fileLabel}: Mistral OCR failed (${err.message}) — falling back to local Tesseract OCR…`;
+          ocrText = await ocrPdf(pdf, numPages, fi, fileStates.length);
+        }
+      } else {
+        modeTitle.textContent = '🔍 Tesseract OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — running local Tesseract OCR…`;
+        ocrText = await ocrPdf(pdf, numPages, fi, fileStates.length);
+      }
+      text = ocrText;
+    }
+
+    allRawText += `\n\n=== ${file.name}${usedOCR ? ' (OCR)' : ''} ===\n` + text;
+
+    const format = detectPayslipFormat(text);
+    let record = null;
+    if (format === 'legacy') record = parseLegacyPayslip(text);
+    else if (format === 'uhp') record = parseUHPPayslip(text);
+
+    if (!record) {
+      showWarn(`Could not detect pay slip format for "${file.name}".`);
+      continue;
+    }
+    record.file = file.name;
+    parsed.push(record);
+
+    setProg(Math.round(((fi + 1) / fileStates.length) * 85) + 5, `${fileLabel} — parsed (${record.format})`);
+  }
+
+  debugText.textContent = (debugText.textContent ? debugText.textContent + '\n\n' : '') + allRawText.trim();
+  debugSection.classList.add('show');
+
+  if (!parsed.length) {
+    showErr(hasAnyResults()
+      ? 'Could not detect a pay slip format in any of the newly added file(s). Expand "Show extracted raw text" to inspect what was read.'
+      : 'No pay slips could be parsed. Expand "Show extracted raw text" to inspect what was read.');
+  } else {
+    payslipRows = payslipRows.concat(parsed);
+    renderPayslipResults(payslipRows);
+    const formats = [...new Set(payslipRows.map(p => p.format))];
+    bankDetectedEl.textContent = '✓ Formats: ' + formats.join(', ');
+    ocrDetectedEl.textContent = `📄 ${payslipRows.length} pay slip${payslipRows.length > 1 ? 's' : ''} total`;
+    results.classList.add('show');
+    setProg(100, `Done — ${parsed.length} new pay slip${parsed.length > 1 ? 's' : ''} added (${payslipRows.length} total)`);
+    commitParsedFiles();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// AUTO-DETECT MODE — classifies each dropped file (bank statement / bill /
+// pay slip) from its extracted text, so the user never has to pick a mode.
+// A batch can contain a mix of document types: each is parsed through its
+// existing mode-specific pipeline, then shown as its own tab if more than
+// one type is present, so nothing gets silently merged or dropped.
+// ═══════════════════════════════════════════════════════════════════════
+async function runAutoParse() {
+  const buckets = { bank: [], bill: [], payslip: [], unknown: [] };
+  const total = selectedFiles.length;
+
+  // Phase 1 — read every file and check which ones need OCR at all, without
+  // actually OCR'ing anything yet. Auto-detect doesn't know a document's
+  // category until after OCR runs, so unlike the dedicated Bank Statement
+  // mode (which never touches Mistral, full stop), a scanned bank statement
+  // dropped here can still end up in the Mistral file list below — the
+  // confirmation copy says so explicitly since the user can't rely on
+  // category-based filtering in this mode.
+  const fileStates = [];
+  for (let fi = 0; fi < total; fi++) {
+    const file = selectedFiles[fi];
+    const fileLabel = `[${fi + 1}/${total}] ${file.name}`;
+    setProg(Math.round((fi / total) * 30) + 5, `${fileLabel} — reading…`);
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const text = await extractLayoutText(pdf);
+    const needsOCR = text.replace(/\s+/g, '').length < pdf.numPages * 80;
+    fileStates.push({ file, fileLabel, pdf, text, needsOCR });
+  }
+
+  // Phase 2 — ask which of the scanned files (if any) may go to Mistral.
+  const ocrNeeded = fileStates.filter(s => s.needsOCR);
+  let mistralSet = new Set();
+  if (ocrNeeded.length && getMistralKey()) {
+    progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+    modeTitle.textContent = '⚠️ Confirm cloud OCR'; modeDesc.textContent = 'Waiting for your confirmation…';
+    const approved = await confirmMistralFileList(
+      ocrNeeded.map(s => s.fileLabel),
+      "These files need OCR to read, and auto-detect doesn't know their type yet — any one of them could turn out to be a bank statement. Sending one to Mistral's cloud OCR means whatever's on it leaves your browser."
+    );
+    mistralSet = new Set(approved);
+  }
+
+  // Phase 3 — OCR (local or Mistral, per the user's choice), then classify.
+  let allRawText = '';
+  for (let fi = 0; fi < fileStates.length; fi++) {
+    const { file, fileLabel, pdf, needsOCR } = fileStates[fi];
+    let { text } = fileStates[fi];
+    let usedOCR = false;
+    const numPages = pdf.numPages;
+
+    if (needsOCR) {
+      usedOCR = true;
+      progressEl.classList.add('ocr-mode'); modeBar.classList.add('show');
+      if (mistralSet.has(fileLabel)) {
+        modeTitle.textContent = '☁️ Mistral OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — sending to Mistral OCR (cloud)…`;
+        try { text = await mistralOcrPdf(file, getMistralKey()); }
+        catch (err) {
+          modeDesc.textContent = `${fileLabel}: Mistral OCR failed (${err.message}) — falling back to local Tesseract OCR…`;
+          text = await ocrPdf(pdf, numPages, fi, fileStates.length);
+        }
+      } else {
+        modeTitle.textContent = '🔍 Tesseract OCR';
+        modeDesc.textContent = `${fileLabel} is an image PDF — running local Tesseract OCR…`;
+        text = await ocrPdf(pdf, numPages, fi, fileStates.length);
+      }
+    }
+
+    allRawText += `\n\n=== ${file.name}${usedOCR ? ' (OCR)' : ''} ===\n` + text;
+
+    const category = classifyDocument(text);
+    setProg(Math.round(((fi + 1) / fileStates.length) * 85) + 5, `${fileLabel} — detected: ${category}`);
+
+    if (category === 'bill') {
+      // parseSP needs a per-page array. If OCR already ran, reuse that single
+      // blob as one "page" — the same fallback bill mode itself uses when OCR
+      // is needed. Otherwise re-read the real per-page text layer (cheap, no
+      // OCR involved) so multi-page bills split correctly.
+      const pages = usedOCR ? [text] : await extractPagesBill(pdf);
+      buckets.bill.push({ file, text, pages });
+    } else {
+      buckets[category].push({ file, text });
+    }
+  }
+
+  debugText.textContent = (debugText.textContent ? debugText.textContent + '\n\n' : '') + allRawText.trim();
+  debugSection.classList.add('show');
+
+  // Merge into whatever auto-detect already had accumulated from a previous
+  // incremental parse, rather than replacing it — a fresh local copy so
+  // autoResults itself is only reassigned once we know this run actually
+  // contributed something (see the `!known.length` bail-out below).
+  const merged = { bank: autoResults?.bank || null, bill: autoResults?.bill || null, payslip: autoResults?.payslip || null };
+
+  if (buckets.bank.length) {
+    let combinedTransactions = [];
+    for (const { file, text } of buckets.bank) {
+      const { bank, transactions } = detectAndParse(text);
+      const stmtDate = extractStatementDate(text);
+      transactions.forEach(t => { t.bank = bank; t.file = file.name; t.category = categorize(t.description); t.stmtDate = stmtDate; });
+      combinedTransactions = combinedTransactions.concat(transactions);
+    }
+    if (combinedTransactions.length) merged.bank = { transactions: (merged.bank?.transactions || []).concat(combinedTransactions) };
+  }
+
+  if (buckets.bill.length) {
+    const parsedBills = [];
+    for (const { file, text, pages } of buckets.bill) {
+      const type = detectBillType(text);
+      let bill = null;
+      if (type === 'geneco') bill = parseGeneco(text);
+      else if (type === 'sp') bill = parseSP(pages, text);
+      if (bill && bill.monthYear) { bill.sourceFile = file.name; parsedBills.push(bill); }
+    }
+    if (parsedBills.length) {
+      allParsedBills = allParsedBills.concat(parsedBills);
+      merged.bill = { rows: combineBills(allParsedBills) };
+    }
+  }
+
+  if (buckets.payslip.length) {
+    const parsed = [];
+    for (const { file, text } of buckets.payslip) {
+      const format = detectPayslipFormat(text);
+      let record = null;
+      if (format === 'legacy') record = parseLegacyPayslip(text);
+      else if (format === 'uhp') record = parseUHPPayslip(text);
+      if (record) { record.file = file.name; parsed.push(record); }
+    }
+    if (parsed.length) merged.payslip = { rows: (merged.payslip?.rows || []).concat(parsed) };
+  }
+
+  const known = ['bank', 'bill', 'payslip'].filter(k => merged[k]);
+
+  if (buckets.unknown.length) {
+    showWarn(`Couldn't determine the document type for: ${buckets.unknown.map(x => x.file.name).join(', ')}. Select a mode above and re-drop just those file(s) to parse them manually.`);
+  }
+  if (!known.length) {
+    showErr(hasAnyResults()
+      ? 'Could not determine the document type for any of the newly added file(s). Expand "Show extracted raw text" to inspect what was read, or select a mode manually.'
+      : 'No supported document type was recognized in the uploaded file(s). Expand "Show extracted raw text" to inspect what was read, or select a mode manually.');
+    return;
+  }
+
+  autoResults = merged;
+  renderResultTabs(known);
+  // Keep showing whichever tab the user was already on, if it still has
+  // data, rather than jumping back to the first category on every add.
+  activateAutoCategory(known.includes(currentMode) ? currentMode : known[0]);
+  results.classList.add('show');
+  const counts = known.map(k => `${k} (${k === 'bank' ? autoResults.bank.transactions.length : autoResults[k].rows.length})`);
+  setProg(100, `Done — ${counts.join(', ')}`);
+  progressLbl.classList.add('done');
+  commitParsedFiles();
+}
+
+const CATEGORY_LABEL = { bank: '🏦 Bank Statement', bill: '💡 Electricity & Water', payslip: '📄 Pay Slip' };
+function renderResultTabs(categories) {
+  if (categories.length <= 1) { resultTabs.innerHTML = ''; resultTabs.style.display = 'none'; return; }
+  resultTabs.style.display = 'flex';
+  resultTabs.innerHTML = categories.map(cat => {
+    const count = cat === 'bank' ? autoResults.bank.transactions.length : autoResults[cat].rows.length;
+    return `<button class="result-tab" data-cat="${cat}">${CATEGORY_LABEL[cat]} (${count})</button>`;
+  }).join('');
+  resultTabs.querySelectorAll('.result-tab').forEach(b => b.addEventListener('click', () => activateAutoCategory(b.dataset.cat)));
+}
+function activateAutoCategory(cat) {
+  currentMode = cat;
+  applyModeChrome(cat);
+  resultTabs.querySelectorAll('.result-tab').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+  highlightBank('');
+  if (cat === 'bank') {
+    allTransactions = autoResults.bank.transactions; currentPage = 1;
+    renderPage(); renderSummary(allTransactions);
+    const banks = [...new Set(allTransactions.map(t => t.bank))];
+    bankDetectedEl.textContent = '✓ Banks: ' + banks.join(', ');
+  } else if (cat === 'bill') {
+    combinedRows = autoResults.bill.rows;
+    renderBillResults(combinedRows);
+  } else if (cat === 'payslip') {
+    payslipRows = autoResults.payslip.rows;
+    renderPayslipResults(payslipRows);
+    const formats = [...new Set(payslipRows.map(p => p.format))];
+    bankDetectedEl.textContent = '✓ Formats: ' + formats.join(', ');
+  }
+}
+
+// ── Category lookup ────────────────────────────────────────────────────────────
+// CATEGORY_TABLE: [rawDescription, category] pairs from the user-supplied lookup
+// table. Entries ending in "*" are wildcard/prefix patterns (e.g. "MCDONALD*").
+// Where the same merchant maps to two categories across rows, the later row wins.
+const DEFAULT_CATEGORY_TABLE = [
+["*AIRASIA*","Transport"],
+["*AIRASIA*","Transport"],
+["*AIRASIA*","Transport"],
+["*AIRASIA*","Transport"],
+["-2936 AMAZON RETAIL SG","UHP"],
+["2C2*SHOPBACK","Food"],
+["2C2*SHOPBACK  OLD  CHANG","Food"],
+["2C2_LAZADA","Child"],
+["2C2P−LAZADA(NON 3D) SINGAPORE SG","Lazada"],
+["2C2P-LAZADA(NON 3D)-EC SINGAPORE SG","House"],
+["51EZPY [UNPOSTED] A","AIA"],
+["51EZPY CHALLENGER−L","UHP"],
+["51EZPY CHALLENGER−N","UHP"],
+["51EZPY OPTIMA WERKZ","UHP"],
+["635C SENJA RD BADALING*","Food"],
+["7- ELEVEN*","Food"],
+["ZTP GINSENG *","Food"],
+["A  KITCHEN*","Food"],
+["A&W*","Food"],
+["ABSOLUTE  KINETICS*","UHP"],
+["ACTIVESG*","Leisure"],
+["AIA*","AIA"],
+["AIRASIA*","Transport"],
+["ALAN SPECIAL","Food"],
+["ALIJIANG - VIVOCITY 1","Food"],
+["ALL IN","Food"],
+["ALLIANZ PARTNERS SINGAPORE SG","Leisure"],
+["AMAZON MKTPLC SG","Misc"],
+["AMAZON MKTPLC SG SINGAPORE SG","UHP"],
+["AMAZON RETAIL SG","Grocery"],
+["ANDERSENS OF DENMARK I","Food"],
+["ANDES*","Food"],
+["ANNUAL FEE*","Misc"],
+["ANNUAL MEMBER*","Misc"],
+["ANTHDL  IMM","Food"],
+["AONE GROUP - HILLION","Food"],
+["APPLE.COM/SG","Misc"],
+["ARENA*","Cloth"],
+["ARIBASUPPLIERBILLIN*","UHP"],
+["ARTISAN FOOD COLLECTIO MYR46.60","Food"],
+["ASTONS-PUNGGOL-COAST-M","Food"],
+["ATLASVENDING*","Food"],
+["ATOME","Cloth"],
+["AUGUST INTER*","UHP"],
+["AUNTIE ANNE'S*","Food"],
+["AWFULLY CHOCOLATE*","Misc"],
+["AXS  *","Utility"],
+["BANGKOK JAM*","Food"],
+["BAOXINGFU*","Food"],
+["BATA*","Cloth"],
+["BCA *","UHP"],
+["BEARD PAPA'S             SINGAPORE    SG","Food"],
+["BEVERAGES - SATAY BT T","Food"],
+["BEYOND PANCAKES","Food"],
+["BHG*","Cloth"],
+["BIGFISHSMALLFISH         Singapore    SG XXXX-XXXX-XXXX-6067","Food"],
+["BIRD PARADISE TICKET Singapore SG","Leisure"],
+["BJB-FUNAN","Food"],
+["BJR - AJISEN SHOKUDO SINGAPORE SG","Food"],
+["BJR - TOKYO SHOKUDO","Food"],
+["BJR-AJISEN*","Food"],
+["BJR-TORI SANWA BUGIS","Food"],
+["BOARDINGGATE-EC","Misc"],
+["BOLEH BOLEH*","Food"],
+["BOOK DEPOSITORY          LONDON       GB","Misc"],
+["BOOKDEPOSITORY.COM","Leisure"],
+["BOOKDEPOSITORY.COM       441452307905 GB","Leisure"],
+["BOON TONG KEE*","Food"],
+["BREADTALK*","Food"],
+["BUKIT PANJANG POLYCLIN*","Health"],
+["BURGER KING*","Food"],
+["BurgerKing*","Food"],
+["BUS/MRT *","Transport"],
+["BVKIDZPTELTD","Child"],
+["BVUNIFORMPTELTD SINGAPORE SG","Child"],
+["CBAddspendcampaign","NIL"],
+["CBTL*","Food"],
+["CCY CONVERSION FEE*","Misc"],
+["Challenger*","UHP"],
+["CHATERAISE*","Food"],
+["Cheston Infant care - Aiden","Child"],
+["Chew Install (Fan)","House"],
+["Child RC's Family Clinic","Health"],
+["CHINESE EMBASSY IN SIN","Misc"],
+["CHOA CHU KANG POLYCLINIC*","Health"],
+["CJ KITCHEN CLEMENTI MA   SINGAPORE    SG","Food"],
+["CJ LAMIAN HILLION MALL","Food"],
+["CLAUDE.AI*","Misc"],
+["COFFEE BEE-SCIENCE CTR*","Food"],
+["COLD  STORAGE*","Grocery"],
+["Comfort*","Transport"],
+["COMMON GRILL*","Food"],
+["COURTS*","UHP"],
+["CROCS*","Cloth"],
+["DAISO JAPAN*","Food"],
+["DCC FEE 1.08","UHP"],
+["De Arte Hair Studio","Misc"],
+["DECATHLON*","Leisure"],
+["DELIFRANCE*","Food"],
+["DIAN XIAO ER           Singapore SG","Food"],
+["DINGTELE","Misc"],
+["DOCTORANYWHERE           6581267212   SG","Health"],
+["DOMINO'S JOO KOON        SINGAPORE","Food"],
+["DOMINOS PIZZA*","Food"],
+["DON DON DONKI*","Food"],
+["DON N BAP SINGAPORE","Food"],
+["DUMPRICE","Food"],
+["DUNKIN' DONUTS*","Food"],
+["E GIFTS*","Misc"],
+["EATPIZZA - PL*","Food"],
+["ECHO RETAIL*","Cloth"],
+["EIGHTEEN CHEFS*","Food"],
+["EMPRESS FOODS*","Food"],
+["ENCIK TAN*","Food"],
+["EPITEX*","House"],
+["ESW  NIKE  IRL","Cloth"],
+["EVERSAFEACADEMY*","UHP"],
+["EXABYTESSG*","UHP"],
+["EZPY AIA *","AIA"],
+["EZPY CHALLENGER*","UHP"],
+["EZPY IKEA*","House"],
+["EZPY OPTIMA WERKZ*","UHP"],
+["EZPY SERVICE FEE","UHP"],
+["FAIRPRICE*","Food"],
+["Fave*","Food"],
+["FINEST  JEWEL","NTUC"],
+["FISH MART SAKURAYA - W","Food"],
+["FISH WITH YOU FB PT.. SINGAPORE SG","Food"],
+["FIVE SPICE*","Food"],
+["FJ  JWL  -  DRINKS  STALL","Food"],
+["FJ  JWL  -  HOME-MADE  NOO","Food"],
+["FJ  JWL  -  HUAT  HUAT  BBQ","Food"],
+["FJ LOT - LAM'S NOODLE    SINGAPORE    SG XXXX-XXXX-XXXX-5395","Food"],
+["FJ LOT BLANCO BEEF","Food"],
+["FLAMING SPICE            SINGAPORE    SG","Food"],
+["FLORAL  FANTASY  @  BAYFR","Leisure"],
+["FLOWERSANDKISSES","UHP"],
+["FLYSCOOT.COM*","Leisure"],
+["Food","Food"],
+["FOODPANDA SINGAPORE","Food"],
+["FOUR  LEAVES*","Food"],
+["FR CSQ-SHOCK JAPANESE    SINGAPORE","Food"],
+["FRAGRANCE*","Food"],
+["FRUIT - SATAY*","Food"],
+["FU LIN IMM","Food"],
+["FUSION SPOON*","Food"],
+["FWD SINGAPORE*","Leisure"],
+["GAIN CITY BEST ELECTRIC*","House"],
+["GARDENS BY THE BAY*","Leisure"],
+["GET*GET*EIGHTEEN CHEFS","Food"],
+["GET*GET*Eighteen Chefs   SINGAPORE    SG XXXX-XXXX-XXXX-5395","Food"],
+["GET*West Coz Cafe        SINGAPORE    SG","Food"],
+["GETZ\"18Chefs \"*","Food"],
+["GIANT*","Grocery"],
+["GIORDANO*","Cloth"],
+["GIRO HANDLING FEE","Misc"],
+["GIRO PAYMENT - THANK YOU","NIL"],
+["GIRO PAYMENT REVERSAL","NIL"],
+["GO ANG PRATUNAM*","Food"],
+["GOJEK","Transport"],
+["GOMO MOBILE*","Utility"],
+["GONG CHA*","Food"],
+["Google One*","Utility"],
+["Google Storage           SINGAPORE    SG","Misc"],
+["Google Storage SINGAPORE","UHP"],
+["Google Storage SINGAPORE SG","UHP"],
+["Gopay-Gojek*","Transport"],
+["Grab*","Transport"],
+["GST @ 7%","Misc"],
+["GST ON ANNUAL MEMBERSHIP FEE","Misc"],
+["GST ON MEMBERSHIP FEE REVERSAL","NIL"],
+["GST REVERSAL","NIL"],
+["GUARDIAN*","Health"],
+["HA JUN (CLEMENTI MALL)   SINGAPORE","Food"],
+["HAI DI LAO*","Food"],
+["HAINAN*","Food"],
+["HAIRCOVE*","Misc"],
+["HALE SMOOTHIES PTE LTD","Food"],
+["HALIA PANTRY AT THE VI","Food"],
+["HAPPINESS PTE LTD","House"],
+["HARDWARECITY*","UHP"],
+["HARVEY NORMAN*","UHP"],
+["HASAMI STUDIO*","Misc"],
+["HAWKERS  STREET*","Food"],
+["HDB SEASON PARKING*","UHP"],
+["HDB-BQD SALE OF PLAN","Misc"],
+["HEALING SANCTUARY N/A","Health"],
+["HEAVENLYWANG*","Food"],
+["HelloRide*","Leisure"],
+["HILL VIEW MARKET PLACE","Grocery"],
+["HKS CLEMENTI MALL","Food"],
+["HM JEM*","Food"],
+["HOCKHUA TONIC*","Food"],
+["HOLLAND−BUKIT*","Utility"],
+["HOME'S HARMONY*","House"],
+["HOODADAK","Food"],
+["HORME HARDWARE*","House"],
+["House loan","House"],
+["ICA-EBR SINGAPORE SG","Misc"],
+["ICHIBAN BOSHI*","Food"],
+["ICHIKOKUDO*","Food"],
+["IJ00Z AI*","Food"],
+["IKEA*","House"],
+["Infant care Subsidy","Child"],
+["INTEREST","NIL"],
+["ISETAN*","Food"],
+["ISKINA CEBU","Food"],
+["JELIVO*","Misc"],
+["JEWEL ATTRACTIONS*","Leisure"],
+["JINJJA KITCHEN","Food"],
+["JOLLIBEAN*","Food"],
+["JUMPEATCRY.COM*","Cloth"],
+["JURASSIC NEST*","Food"],
+["Jurong Point             Singapore    SG","Cloth"],
+["KAFFE & TOAST*","Food"],
+["KAZUKI (KENTRIDGE)*","Food"],
+["KFC*","Food"],
+["KIDDY PALACE*","Child"],
+["KKIA F&B*","Food"],
+["KODAK EXPRESS","Misc"],
+["KOO KEE*","Food"],
+["KOPITIAM*","Food"],
+["KORYO MALL PTE LTD - B","Grocery"],
+["KOUFU*","Food"],
+["KRISPY KREME*","Food"],
+["KYRIN SUSHI GEORGETOWN MY\r\nMALAYSIAN RINGGIT 353.55","Food"],
+["LAO HUO TANG             SINGAPORE    SG","Food"],
+["LAO JIANG SUPERIOR SOU","Food"],
+["LATE CHARGE*","Misc"],
+["LAVENDER*","Food"],
+["LAZADA*","Lazada"],
+["LE SHRIMP RAMEN -TSV","Food"],
+["LEE MART*","Food"],
+["LEE WEE & BROTHERS *","Food"],
+["LENSKART*","Health"],
+["LHFOODCO","Food"],
+["LIHO  TEA*","Food"],
+["LLAO  LLAO*","Food"],
+["lumosprojector.com*","UHP"],
+["M SQ PTE LTD*","Food"],
+["MALAYSIA BOLEH JURONG","Food"],
+["MAM MAM                 SINGAPORE    SG","Food"],
+["MANBOK BT TIMAH        SINGAPORE","Food"],
+["MANDAI TICKETING","Leisure"],
+["Mandai Wildlife*","Food"],
+["MASTER JIANG'S PASTRI","Food"],
+["MCDONALD*","Food"],
+["MI CUN PTE. LTD.*","Food"],
+["MICUN BANFAN*","Food"],
+["MIXUE","Food"],
+["MK LEVURE NATURELLE_O    Singapore    SG XXXX-XXXX-XXXX-6067","Food"],
+["MOLLY FANTASY/KIDZOOON MYR30.00","Child"],
+["MOM*","UHP"],
+["MOS BURGER*","Food"],
+["MR BIRYANI - ONE NORTH   SINGAPORE    SG","Food"],
+["MR COCONUT-IMM","Food"],
+["MR DIY*","House"],
+["M-S-WPD-WPOL2*","UHP"],
+["MUI KEE EXPRESS - CLUN   SINGAPORE    SG","Food"],
+["MY KAMPUNG - KALLANG W","Food"],
+["MYACTIVESG*","Health"],
+["MYICA*","Misc"],
+["MYSINGTELAPP*","Utility"],
+["MYUNGGA*","Food"],
+["N.U.H*","Health"],
+["NAME-CHEAP.COM*","Misc"],
+["NAMU  BULGOGI  -  HILLION","Food"],
+["NATIONAL LIBRARY BOARD*","Misc"],
+["NATIONAL UNIVERSITY HO*","Health"],
+["Navigators","Giving"],
+["NET*BAKERY  CUISINE SINGAPORE      SG","Food"],
+["NET*EVERS CR SINGAPORE SG","UHP"],
+["NET*J'KIDS AMUSEMENT P 50.00","Leisure"],
+["NET*KILLINEY SINGAPORE 30.90","Food"],
+["NET*SUBWAY","Food"],
+["Nets Flashpay Top-up","UHP"],
+["NETS TOP UP","UHP"],
+["NFPMOBILE−OFFUSUOB","Utility"],
+["NHG PHARMACY*","Health"],
+["NIKE*","Cloth"],
+["NINE FRESH JEWEL*","Food"],
+["NOVOTEL BANGKOK PLATINUM BANGKOK TH BAHT 13,149.15","Leisure"],
+["NTUC LEARNINGHUB*","UHP"],
+["NTUC FairPrice*","NTUC"],
+["NTUC FP*","NTUC"],
+["NUH - *","Health"],
+["NUH KRW L3 KIOSK C*","Health"],
+["NUH MBL2 KIOSK E-1 SINGAPORE SG","Health"],
+["NUH MCL14 KIOSK B-1","Health"],
+["NUHMC-*","Health"],
+["NUHS*","Health"],
+["NUODLE @ LOT1","Food"],
+["NUODLE@LOT! Singapore 22.35","Food"],
+["NUS ECOLL2.0*","Misc"],
+["OCEANIC LINK PL SINGAPORE SG","UHP"],
+["OCTOBOX BTCNUS","Food"],
+["OHAYO  IMAGE*","Misc"],
+["OKTOP KOREAN CUISINE*","Food"],
+["OLD CHANG KEE*","Food"],
+["OLD STREET BAK KUT*","Food"],
+["OMOOMO FOOD CONCEPTS*","Food"],
+["ONLINE SGT 96150809 SINGAPORE SG","Utility"],
+["ONSI NETHERLANDS NL","UHP"],
+["OPENAI FOREIGN*","Misc"],
+["OPN Origin*","House"],
+["OPTIMA WERKZ*","UHP"],
+["ORDER.PLAC* TAMJAISAMG","Food"],
+["ORO REDEMPTION CENTRE","Child"],
+["OSOME","Misc"],
+["OUTLET SALES","Cloth"],
+["PARIS BAGUETTE*","Food"],
+["PARKING.SG *","Transport"],
+["PAYNOW SHOPEEPAY ... SPP74390891108535531","Shopee"],
+["PAYPAL *FIRSTAIDSUP 62920432 SG","UHP"],
+["PAYPAL *PAREXGROUPP 4029357733 SG","UHP"],
+["PAYPAL *THOMSONBABY","Health"],
+["PEOPLE'S  ASSOCIATION","Grocery"],
+["PEOPLE'S ASSOCIATIO Singapore SG","Food"],
+["PEOPLE'S ASSOCIATION","Food"],
+["PERTAMA MERCHANDISING SINGAPORE SG","UHP"],
+["PETER F&B SUPPLIES*","Food"],
+["PHS HLM 348              SINGAPORE    SG","Cloth"],
+["PHYSIO ASIA THERAPY*","Health"],
+["PIERRE CARDIN*","Cloth"],
+["PIZZA HUT*","Food"],
+["PIZZAHUT*","Food"],
+["PN SINGAPORE*","Health"],
+["POCHA KOREAN*","Food"],
+["POKKA PTE LTD*","Food"],
+["POLAR PUFFS & CAKES*","Food"],
+["POPEYES*","Food"],
+["POPULAR BOOK*","Child"],
+["POPULARSG","Child"],
+["PRIMA  DELI*","Food"],
+["PS KEAT HONG","Food"],
+["Q&M DENTAL*","Health"],
+["QIN JI ROUGAMO*","Food"],
+["Qoo10*","Qoo10"],
+["Ramen Shiba*","Food"],
+["REDMAN*","Food"],
+["RELACTO.COM*","Food"],
+["RINNAI HOLDINGS*","House"],
+["RROOLL*","Food"],
+["RTL INT CRED ADJ","NIL"],
+["RWS FB MALAYSIAN FD ST*","Food"],
+["SAAP SAAP THAI*","Food"],
+["SAFFRONS*","UHP"],
+["SAGION LEGEND","Food"],
+["SAIZERIYA*","Food"],
+["SANOOK KITCHEN*","Food"],
+["SBTB SATAY*","Food"],
+["SBTB STALL*","Food"],
+["SCAL ACADEMY*","UHP"],
+["SCARLETT*","Food"],
+["SCIENCE CENTRE SINGAPO","Leisure"],
+["SEA HORSE*","House"],
+["SELFFIX.COM","House"],
+["SENTOSA EXPRESS*","Transport"],
+["SEOUL GARDEN HOTPOT*","Food"],
+["SERAYA ENERGY*","Utility"],
+["SF - CLEMENTI MALL SINGAPORE      SG","Food"],
+["SG F&B MANAGEMENT","Food"],
+["SHAKE SHACK*","Food"],
+["SHAN CHENG*","Food"],
+["SHANDONG TCM*","Health"],
+["SHAXIAN SNACKS","Food"],
+["SHEIN.COM*","Cloth"],
+["SHELL*","Transport"],
+["SHENG SIONG*","ShengS"],
+["SHENGSIONG*","ShengS"],
+["SHINMANBOK-HILLV2 SINGAPORE     SG","Food"],
+["ShopBack*","Food"],
+["Shopee*","Shopee"],
+["SIAM KITCHEN*","Food"],
+["SICHUAN CHEF*","Food"],
+["SIMBATELECOM*","Misc"],
+["SIMPLYGO                 SINGAPORE    SG","Transport"],
+["SINGPOST*","Misc"],
+["SINGSAVER*","Leisure"],
+["SINGTEL*","Utility"],
+["SINTEX NYLON*","House"],
+["SKECHERS OUTLET*","Cloth"],
+["Skool4Kidz-Aiden","Child"],
+["Skool4Kidz-Danielle","Child"],
+["Skool4Kidz-Nathan","Child"],
+["SMILE DESSERT*","Food"],
+["SMP PAIK'S NOODLE*","Food"],
+["SMP*NEW NANYANG ONE@KE 3.33","Food"],
+["SNP*GELATIAMO","Food"],
+["SNP*JIA HE XING","Food"],
+["SO PHO*","Food"],
+["SOFNADE CATERING PTE","Food"],
+["SONG FA*","Food"],
+["SOPHO*","Food"],
+["SORELLA*","Cloth"],
+["SP  DIGITAL  PL-UTIL-RE","Utility"],
+["SP * SMILING FLORA","Leisure"],
+["SP CAMOMILE SPRING SINGAPORE SG","Leisure"],
+["SP DIGITAL*","Utility"],
+["SP FLORISTIQUESG","Misc"],
+["SP SHOPIFY POPULAR SINGAPORE SG","UHP"],
+["SP TOYOGO−CHUAN HEN SINGAPORE SG","UHP"],
+["SPL AUTO TOPUP*","Transport"],
+["S'PORE SCIENCE CENTRE*","Leisure"],
+["SPORE TELECOM*","Utility"],
+["STARBUCKS*","Food"],
+["STARHUB*","Utility"],
+["STBILL","Health"],
+["STUFF'D*","Food"],
+["SUBWAY*","Food"],
+["SUKIYA*","Food"],
+["SUNNY KOREAN*","Food"],
+["SUNWAY BIZ HOTEL (PENANG)GEORGETOWN MY\r\nMALAYSIAN RINGGIT 698.80","Leisure"],
+["SUNWAY MARKETING*","UHP"],
+["SUSHI GO*","Food"],
+["SUSHI-GO*","Food"],
+["SWABTESTAND/ORSDFSTAY","Health"],
+["SWEE HENG BAKERY*","Food"],
+["SWENSEN*","UHP"],
+["SZ MEMBERSHIP            Singapore    SG","Leisure"],
+["TAI CHEONG BAKERY*","Food"],
+["TEXAS CHICKEN - CCK SINGAPORE SG","Food"],
+["THE DINING AVENUE","Food"],
+["THE GREEN PARTY*","Misc"],
+["THE HAINAN STORY*","Food"],
+["THE SEAFOOD MARKET*","Food"],
+["THE SOUP SPOON*","Food"],
+["THE WHALE TEA*","Food"],
+["THEJELLYHEARTS*","Food"],
+["THIAM HAO YUN*","Misc"],
+["TIAN WEI SIGNATURE*","Food"],
+["TIKTOK SHOP SELLER","Shopee"],
+["TikTok Shop Seller Singapore SG","Misc"],
+["TMCF  -  JEWEL","Food"],
+["TOAST BOX*","Food"],
+["TOM & STEFANIE*","Child"],
+["TONGUE TIP*","Food"],
+["TONKOTSU KAZAN RAMEN","Food"],
+["Toy","Child"],
+["TOYOGO*","UHP"],
+["TOYS'R'US*","Child"],
+["TPLANETTRAVELLER*","Misc"],
+["TRANSIT *","Transport"],
+["Trip. Com*","Transport"],
+["TS/GOCHISO SHOKUDO BU","Food"],
+["TS/ICHIKOKUDO RAMEN","Food"],
+["TS/SUKIYA - HILLION MA","Food"],
+["TS/TONGUE TIP LANZHOU*","Food"],
+["TSiichikok ‘Singapore “se","Food"],
+["TWYST AT JEM*","Food"],
+["UMISUSHI*","Food"],
+["UNIQLO*","Cloth"],
+["UNITY BY FAIRPRICE*","NTUC"],
+["VODIEN*","UHP"],
+["VOFFICESINGAPORE","Misc"],
+["WADO","Food"],
+["WARBURG VENDING*","Food"],
+["WAREHOUSE CLUB - FAIRP*","NTUC"],
+["WATSON'S*","Health"],
+["WEST CO'Z CAFÉ*","Food"],
+["WHIZ  COMMUNICATIONS*","Utility"],
+["WOK PALACE","Food"],
+["WORKING TITLE PTE LTD","Misc"],
+["WORLD OF SPORTS*","Cloth"],
+["WTRAJUMMAS*","Food"],
+["www trip com*","Misc"],
+["WWW.GRAB.COM*","Leisure"],
+["WWW.RES.COM*  RAMENKIOU","Food"],
+["WWW.SHOPBACK.COM","Food"],
+["X CORP*","Misc"],
+["YA KUN CAFÉ*","Food"],
+["YOLE*","Food"],
+["YONGLE PREFERRED FOOD*","Food"],
+["ZTP GINSENG BIRDNEST*","Food"]
+];
+
+// CATEGORY_TABLE is the active table used for lookups: a user-imported table
+// (persisted in localStorage) if present, otherwise the built-in default above.
+const CUSTOM_CATEGORY_STORAGE = 'customCategoryTable';
+function loadCategoryTableOverride() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_CATEGORY_STORAGE);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (Array.isArray(parsed) && parsed.length) ? parsed : null;
+  } catch (e) { return null; }
+}
+let CATEGORY_TABLE = loadCategoryTableOverride() || DEFAULT_CATEGORY_TABLE;
+
+function normCategoryKey(s) {
+  return (s||'')
+    .toUpperCase()
+    .replace(/[‐-―−]/g, '-')       // unicode dashes/minus -> hyphen
+    .replace(/[‘’“”']/g, '')  // smart quotes/apostrophes -> stripped
+    .replace(/XXXX-XXXX-XXXX-\d{4}/g, '')          // masked card numbers
+    .replace(/\r?\n/g, ' ')
+    .replace(/^(\d{1,2}\s*\/?\s*\d{1,2}\s+)/, '')  // leading dd/mm
+    .replace(/^(\d{1,2}\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+){1,2}/i, '') // leading dd mon [dd mon]
+    .replace(/\(\s*[\d,]+\.\d{2}\s*\)\s*$/, '')    // trailing (amount)
+    .replace(/\s*[\d,]+\.\d{2}\s*(CR)?\s*$/i, '')  // trailing amount
+    .replace(/\s+(SINGAPORE|SG|MYR|SGD|USD|GBP|US|GB|MY|TH|BAHT)\b\s*$/i,'')
+    .replace(/\s+(SINGAPORE|SG)\b\s*$/i,'')
+    .replace(/\s{2,}/g,' ')
+    .replace(/^\W+|\W+$/g,'')
+    .trim();
+}
+
+// Leading "*" = suffix pattern, trailing "*" = prefix pattern, both = contains
+// pattern (e.g. "*AIRASIA*"). An asterisk elsewhere in the string (e.g.
+// "NET*EVERS CR", "PAYPAL *FIRSTAIDSUP") is a literal merchant-descriptor
+// character, not a wildcard marker.
+let _catExactMap = null, _catKeysSorted = null;
+let _catPrefixList = null, _catSuffixList = null, _catContainsList = null;
+function buildCategoryIndex() {
+  if (_catExactMap) return;
+  _catExactMap = new Map();
+  _catPrefixList = []; _catSuffixList = []; _catContainsList = [];
+  for (const [rawDesc, cat] of CATEGORY_TABLE) {
+    const d = (rawDesc||'').trim();
+    const lead = d.startsWith('*'), trail = d.endsWith('*');
+    let core = d;
+    if (lead) core = core.slice(1);
+    if (trail) core = core.slice(0, -1);
+    const key = normCategoryKey(core);
+    if (!key) continue;
+    if (lead && trail) _catContainsList.push([key, cat]);
+    else if (trail) _catPrefixList.push([key, cat]);
+    else if (lead) _catSuffixList.push([key, cat]);
+    else _catExactMap.set(key, cat);
+  }
+  _catPrefixList.sort((a,b) => b[0].length - a[0].length);
+  _catSuffixList.sort((a,b) => b[0].length - a[0].length);
+  _catContainsList.sort((a,b) => b[0].length - a[0].length);
+  _catKeysSorted = [..._catExactMap.keys()].sort((a,b) => b.length - a.length);
+}
+
+// Forces buildCategoryIndex() to rebuild from the current CATEGORY_TABLE —
+// call after CATEGORY_TABLE is swapped out (e.g. importing a new table).
+function invalidateCategoryIndex() { _catExactMap = null; }
+
+// ── Category table export / import (so the lookup table can be updated later) ─
+function updateCatTableInfo() {
+  const isCustom = !!loadCategoryTableOverride();
+  catTableInfo.textContent = `(${CATEGORY_TABLE.length} entries · ${isCustom ? 'custom, imported' : 'built-in'})`;
+  resetCatBtn.classList.toggle('show', isCustom);
+}
+updateCatTableInfo();
+
+exportCatBtn.addEventListener('click', () => {
+  const rows = CATEGORY_TABLE.map(([d,c]) => ({ Description: d, Category: c }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{wch:55},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Category');
+  XLSX.writeFile(wb, 'category_table.xlsx');
+});
+
+importCatBtn.addEventListener('click', () => catFileInput.click());
+catFileInput.addEventListener('change', async () => {
+  const file = catFileInput.files[0];
+  catFileInput.value = '';
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const pairs = [];
+    for (const row of rows.slice(1)) {
+      const d = (row[0]||'').toString().trim();
+      const c = (row[1]||'').toString().trim();
+      if (d && c) pairs.push([d, c]);
+    }
+    if (!pairs.length) { showErr('Imported file has no valid Description/Category rows.'); return; }
+    CATEGORY_TABLE = pairs;
+    localStorage.setItem(CUSTOM_CATEGORY_STORAGE, JSON.stringify(pairs));
+    invalidateCategoryIndex();
+    updateCatTableInfo();
+  } catch (err) {
+    showErr('Could not read category table file: ' + err.message);
+  }
+});
+
+resetCatBtn.addEventListener('click', () => {
+  localStorage.removeItem(CUSTOM_CATEGORY_STORAGE);
+  CATEGORY_TABLE = DEFAULT_CATEGORY_TABLE;
+  invalidateCategoryIndex();
+  updateCatTableInfo();
+});
+
+// Exact match, then explicit wildcard patterns (prefix/suffix/contains), then
+// a longest-prefix fallback against exact entries (handles typos/truncation
+// in the lookup table, e.g. "MOS BURGER-FUSIONOPOLI" missing the trailing S).
+// Returns '' when nothing matches.
+function categorize(desc) {
+  buildCategoryIndex();
+  const key = normCategoryKey(desc);
+  if (!key) return '';
+  if (_catExactMap.has(key)) return _catExactMap.get(key);
+  for (const [k, cat] of _catPrefixList) { if (k.length >= 3 && key.startsWith(k)) return cat; }
+  for (const [k, cat] of _catSuffixList) { if (k.length >= 3 && key.endsWith(k)) return cat; }
+  for (const [k, cat] of _catContainsList) { if (k.length >= 3 && key.includes(k)) return cat; }
+  for (const k of _catKeysSorted) {
+    if (k.length < 4) continue;
+    if (key.startsWith(k) || k.startsWith(key)) return _catExactMap.get(k);
+  }
+  return '';
+}
+
+// ── Bank detection & routing ──────────────────────────────────────────────────
+function detectAndParse(text) {
+  const t = text.toUpperCase();
+
+  // Check SC first — SC statements contain "DBS BANK" as a transaction payee
+  // which would falsely trigger the DBS/POSB check if DBS ran first.
+  if (t.includes('STANDARD CHARTERED') || t.includes('SIMPLY CASH') ||
+      t.includes('SC MOBILE') || t.includes('8 MARINA BOULEVARD') ||
+      t.includes('STRAIGHTBANK') || t.includes('201224747C')) {
+    return { bank:'Standard Chartered', transactions:parseSC(text) };
+  }
+  if (t.includes('HSBC') || t.includes('HSBC LIVE') ||
+      t.includes('HSBC BANK (SINGAPORE)') || t.includes('4722 669')) {
+    return { bank:'HSBC', transactions:parseHSBC(text) };
+  }
+  if (t.includes('CITIBANK') || t.includes('CITI CASH BACK') || t.includes('CITIPHONE') ||
+      t.includes('CITI PRESTIGE') || t.includes('ROBINSON ROAD P. O. BOX 355')) {
+    return { bank:'Citibank', transactions:parseCiti(text) };
+  }
+  if (t.includes('MAYBANK') || t.includes('TREATS POINTS') || t.includes('1800-MAYBANK') ||
+      t.includes('MAYBANK2U') || t.includes('MAYBANK SINGAPORE')) {
+    return { bank:'Maybank', transactions:parseMaybank(text) };
+  }
+  // PayLah! shares DBS's registration number, so it must be checked before
+  // the generic DBS/POSB check below to avoid being misrouted to parseDBS.
+  if (t.includes('PAYLAH') || t.includes('WALLET ACCOUNT') || t.includes('PDS_GCSPPAYLAH')) {
+    return { bank:'DBS PayLah!', transactions:parsePayLah(text) };
+  }
+  // DBS check uses more specific identifiers — avoid "DBS BANK" alone since
+  // other banks reference it as a payee in their own statements.
+  if (t.includes('POSB') || t.includes('DAILY$') || t.includes('DBS CARDS') ||
+      t.includes('1800 111 1111') || t.includes('196800306E')) {
+    return { bank:'DBS/POSB', transactions:parseDBS(text) };
+  }
+  if (t.includes('OCBC') || t.includes('OVERSEA-CHINESE BANKING') || t.includes('193200032W')) {
+    return { bank:'OCBC', transactions:parseOCBC(text) };
+  }
+  return { bank:'Generic', transactions:parseGeneric(text) };
+}
+
+// True if the text contains any of detectAndParse's specific-bank keywords
+// (everything except its final "Generic" fallback, which has no positive
+// signal and would misclassify every unrecognized document as a bank
+// statement). Used by classifyDocument for auto-detect mode.
+function looksLikeBankStatement(text) {
+  const t = text.toUpperCase();
+  return t.includes('STANDARD CHARTERED') || t.includes('SIMPLY CASH') || t.includes('SC MOBILE') ||
+    t.includes('8 MARINA BOULEVARD') || t.includes('STRAIGHTBANK') || t.includes('201224747C') ||
+    t.includes('HSBC') || t.includes('HSBC LIVE') || t.includes('HSBC BANK (SINGAPORE)') || t.includes('4722 669') ||
+    t.includes('CITIBANK') || t.includes('CITI CASH BACK') || t.includes('CITIPHONE') ||
+    t.includes('CITI PRESTIGE') || t.includes('ROBINSON ROAD P. O. BOX 355') ||
+    t.includes('MAYBANK') || t.includes('TREATS POINTS') || t.includes('1800-MAYBANK') ||
+    t.includes('MAYBANK2U') || t.includes('MAYBANK SINGAPORE') ||
+    t.includes('PAYLAH') || t.includes('WALLET ACCOUNT') || t.includes('PDS_GCSPPAYLAH') ||
+    t.includes('POSB') || t.includes('DAILY$') || t.includes('DBS CARDS') ||
+    t.includes('1800 111 1111') || t.includes('196800306E') ||
+    t.includes('OCBC') || t.includes('OVERSEA-CHINESE BANKING') || t.includes('193200032W');
+}
+
+// Classifies a file's extracted text for auto-detect mode. Order matters:
+// pay slip and bill signals are narrow, specific phrases that never appear
+// in the other two document types, while the bank check above is a broad
+// keyword match that must run LAST — a UHP pay slip literally contains
+// "DBS / POSB BANK" as its salary account, which would otherwise false-match
+// as a bank statement before the pay slip check ever ran.
+function classifyDocument(text) {
+  if (detectPayslipFormat(text) !== 'unknown') return 'payslip';
+  if (detectBillType(text) !== 'unknown') return 'bill';
+  if (looksLikeBankStatement(text)) return 'bank';
+  return 'unknown';
+}
+
+function highlightBank(bank) {
+  const map = {'DBS/POSB':'b-dbs','HSBC':'b-hsbc','Citibank':'b-citi','Maybank':'b-maybank','Standard Chartered':'b-sc','OCBC':'b-ocbc','DBS PayLah!':'b-paylah','Generic':'b-generic'};
+  Object.values(map).forEach(id => $(id)?.classList.remove('active'));
+  if (bank && map[bank]) $(map[bank])?.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DBS / POSB  — "08 DEC SHOPEE SINGAPORE MP 60.55"  / "149.84 CR"
+// ═══════════════════════════════════════════════════════════════════════
+function parseDBS(text) {
+  const txs = [];
+  const RE = /^(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\s+(.+?)\s+([\d,]+\.\d{2})\s*(CR)?\s*$/i;
+  const SKIP = /^(previous balance|sub-total|total|grand total|new transactions|date\s|posb|dbs bank|daily\$|credit limit|minimum payment|gst|statement)/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    const m = line.match(RE);
+    if (!m) continue;
+    const val = parseFloat(m[3].replace(/,/g,''));
+    if (isNaN(val) || val<=0) continue;
+    const isCr = !!(m[4]);
+    txs.push({ date:m[1].trim(), description:cleanDesc(m[2]), amount:isCr?-val:val, type:isCr?'credit':'debit' });
+  }
+  return txs;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DBS PayLah! — "23 Mar XIAN YUAN V 4.00 DB" / "23 Mar TOP UP WALLET FROM MY ACCOUNT 4.00 CR"
+// followed by a "REF NO:. <ref>" line (skipped). DB = spend, CR = wallet top-up.
+// Top-ups are self-transfers, not real transactions, so they're excluded.
+// ═══════════════════════════════════════════════════════════════════════
+function parsePayLah(text) {
+  const txs = [];
+  const RE = /^(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\s+(.+?)\s+([\d,]+\.\d{2})\s+(DB|CR)\s*$/i;
+  const SKIP = /^(previous balance|new transactions|total\s*:|ref no|date\s+description|statement date|useful information|important notice|deposit insurance|terms & conditions|pds_gcsppaylah)/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    const m = line.match(RE);
+    if (!m) continue;
+    const desc = cleanDesc(m[2]);
+    if (/^TOP UP WALLET/i.test(desc)) continue;
+    const val = parseFloat(m[3].replace(/,/g,''));
+    const isCr = m[4].toUpperCase()==='CR';
+    if (isNaN(val) || val<=0 || desc.length<2) continue;
+    txs.push({ date:m[1].trim(), description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+  }
+  return txs;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// HSBC — "31 Dec 29 Dec Globaltix Pte Ltd SG SG 133.20"  / "470.91CR"
+// POST DATE  TRAN DATE  DESC  AMOUNT[CR]
+// ═══════════════════════════════════════════════════════════════════════
+function parseHSBC(text) {
+  const txs = [];
+  const MON = 'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
+  // Case A: full line "11 Mar 10 Mar TRANSIT 30000 SINGAPORE SG 20.00"
+  const RE_FULL = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(\\d{1,2}\\s+(?:${MON}))\\s+(.+?)\\s+([\\d,]+\\.\\d{2})(CR)?\\s*$`,'i');
+  // Case B: date+desc only, amount on next line "11 Mar 10 Mar TRANSIT 30000122239220"
+  const RE_DATE = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(\\d{1,2}\\s+(?:${MON}))\\s+(.+)$`,'i');
+  // Amount at end of any line (possibly with leading desc fragment): "SINGAPORE SG 20.00"
+  const RE_AMT  = /^(.*?)\s*([\d,]+\.\d{2})(CR)?\s*$/i;
+  const SKIP = /^(previous statement|account summary|payments|purchases|gst|total due|total account|minimum|credit limit|rewards|points|log on|statement period|bai junfen|junfen bai)/i;
+
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || SKIP.test(line)) continue;
+
+    // ── Case A: date + desc + amount all on one line ──────────────────────
+    let m = line.match(RE_FULL);
+    if (m) {
+      const date = pickEarlierDate(m[1].trim(), m[2].trim());
+      const desc = cleanDesc(m[3]);
+      const val  = parseFloat(m[4].replace(/,/g,''));
+      const isCr = !!(m[5]);
+      if (!isNaN(val) && val > 0 && desc.length >= 2)
+        txs.push({ date, description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+      continue;
+    }
+
+    // ── Case B: date + desc only; look ahead for amount ───────────────────
+    m = line.match(RE_DATE);
+    if (m) {
+      const date1 = m[1].trim(), date2 = m[2].trim();
+      const descParts = [m[3].trim()];
+      for (let j = i + 1; j <= i + 3 && j < lines.length; j++) {
+        const nxt = lines[j].trim();
+        if (!nxt || SKIP.test(nxt)) break;
+        // Stop if next line is another transaction (starts with a date)
+        if (RE_FULL.test(nxt) || RE_DATE.test(nxt)) break;
+        const ma = nxt.match(RE_AMT);
+        if (ma && parseFloat(ma[2].replace(/,/g,'')) > 0) {
+          const val  = parseFloat(ma[2].replace(/,/g,''));
+          const isCr = !!(ma[3]);
+          if (ma[1].trim()) descParts.push(ma[1].trim());
+          const desc = cleanDesc(descParts.join(' '));
+          if (desc.length >= 2)
+            txs.push({ date:pickEarlierDate(date1,date2), description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+          i = j;
+          break;
+        }
+        descParts.push(nxt);
+      }
+      continue;
+    }
+  }
+  return txs;
+}
+
+
+function parseCiti(text) {
+  const txs = [];
+  const MON = 'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
+  // Credit: amount in parentheses at end  e.g. "02 MAR SPL AUTO TOPUP (CBT/RE Singapore SG (52.85)"
+  const RE_CR = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(.+)\\s+\\(([\\d,]+\\.\\d{2})\\)\\s*$`,'i');
+  // Debit: plain amount at end  e.g. "24 FEB PEOPLE'S ASSOCIATION Singapore SG 45.00"
+  const RE_DR = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(.+?)\\s+([\\d,]+\\.\\d{2})\\s*$`,'i');
+  const SKIP = /^(balance|sub-total|grand total|transactions for|all transactions|retail interest|cash interest|your citibank|citi cash back|kindly ensure|xxxx-|payment due|statement date|credit limit|previous\s|total\s)/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    // Skip supplementary card number lines like "XXXX-XXXX-XXXX-7638"
+    if (/^[X\d]{4}-[X\d]{4}-[X\d]{4}-[X\d]{4}$/.test(line)) continue;
+    let date, desc, val, isCr;
+    // Try credit (parens) first — use greedy (.+) so "SPL (CBT/RE" is captured in desc
+    const mc = line.match(RE_CR);
+    if (mc) {
+      date=mc[1].trim(); desc=mc[2].trim(); val=parseFloat(mc[3].replace(/,/g,'')); isCr=true;
+    } else {
+      const md = line.match(RE_DR);
+      if (!md) continue;
+      date=md[1].trim(); desc=md[2].trim(); val=parseFloat(md[3].replace(/,/g,'')); isCr=false;
+    }
+    if (isNaN(val)||val<=0||desc.length<2||/^\d[\d\s,.]*$/.test(desc)) continue;
+    txs.push({ date, description:cleanDesc(desc), amount:isCr?-val:val, type:isCr?'credit':'debit' });
+  }
+  return txs;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// Maybank — "22FEB 24FEB ICHIBAN BOSHI ... 35.87"  / "5.45CR"
+// DDMMM DDMMM (no space between day and month)
+// ═══════════════════════════════════════════════════════════════════════
+function parseMaybank(text) {
+  const txs = [];
+  const MON = '(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)';
+  const RE = new RegExp(`^(\\d{1,2}${MON})\\s+(\\d{1,2}${MON})\\s+(.+?)\\s+([\\d,]+\\.\\d{2})(CR)?\\s*$`,'i');
+  const SKIP = /^(outstanding balance|total transactions|payment received|total payment|page \d|you have accumulated|treats points|rewards|opening|closing|credit limit|disclosure|minimum)/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    const m = line.match(RE);
+    if (!m) continue;
+    const d1 = expandMaybankDate(m[1]);
+    const d2 = expandMaybankDate(m[2]);
+    const date = pickEarlierDate(d1, d2);
+    const desc = cleanDesc(m[3]);
+    const val = parseFloat(m[4].replace(/,/g,''));
+    const isCr = !!(m[5]);
+    if (isNaN(val)||val<=0||desc.length<2) continue;
+    txs.push({ date:date||m[1], description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+  }
+  return txs;
+}
+
+function expandMaybankDate(s) {
+  return s.replace(/^(\d{1,2})([A-Z]+)$/i,'$1 $2').toUpperCase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Standard Chartered — "24 Feb 25 Feb M-S-WPD-WPOL2 Singapore SG 105.00"
+// Transaction Date | Posting Date | Description | Amount [CR]
+// ═══════════════════════════════════════════════════════════════════════
+function cleanSCDesc(s) {
+  return (s||'')
+    // Strip leading posting-date bleed: "25 Feb " or "03 Mar " at the very start
+    .replace(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+/i, '')
+    // Strip trailing "Transaction Ref <token>"
+    .replace(/\s*Transaction\s+Ref\s+\S+/gi, '')
+    // Strip trailing date token (just in case)
+    .replace(/\s+\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*$/i, '')
+    // Strip trailing SG / Singapore noise
+    .replace(/\s*(singapore|\bsg\b)\s*(\bsg\b)?\s*$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^\W+|\W+$/g, '')
+    .trim();
+}
+
+function parseSC(text) {
+  const txs = [];
+  const MON = 'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
+  const RE = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(\\d{1,2}\\s+(?:${MON}))\\s+(.+?)\\s+([\\d,]+\\.\\d{2})(CR)?\\s*$`,'i');
+  const RE_PAY = new RegExp(`^(\\d{1,2}\\s+(?:${MON}))\\s+(\\d{1,2}\\s+(?:${MON}))\\s+([\\d,]+\\.\\d{2})(CR)?\\s*$`,'i');
+  const SKIP = /^(balance from previous|new balance|minimum payment|cashback summary|total cashback|important|approved credit|previous balance|account|payment due|transaction\s+date)/i;
+
+  const lines = text.split('\n');
+  for (let i=0; i<lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || SKIP.test(line)) continue;
+
+    let m = line.match(RE);
+    if (m) {
+      const date = pickEarlierDate(m[1].trim(), m[2].trim());
+      const desc = cleanSCDesc(m[3]);
+      const val = parseFloat(m[4].replace(/,/g,''));
+      const isCr = !!(m[5]);
+      if (!isNaN(val)&&val>0&&desc.length>=2)
+        txs.push({ date, description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+      continue;
+    }
+    m = line.match(RE_PAY);
+    if (m) {
+      const date = pickEarlierDate(m[1].trim(), m[2].trim());
+      const val = parseFloat(m[3].replace(/,/g,''));
+      const isCr = !!(m[4]);
+      if (!isNaN(val)&&val>0) {
+        let desc='Payment';
+        for (let j=i-1; j>=Math.max(0,i-3); j--) {
+          const prev=lines[j].trim();
+          if (prev&&!/^\d/.test(prev)&&!SKIP.test(prev)&&prev.length>3){ desc=prev; break; }
+        }
+        txs.push({ date, description:cleanSCDesc(desc), amount:isCr?-val:val, type:isCr?'credit':'debit' });
+      }
+    }
+  }
+  return txs;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// OCBC — "03/06 SINGTEL SINGAPORE SG 118.39" / "18/06 ADIDAS_SG SINGAPORE SG (35.00)"
+// DD/MM (no year, no month name) — text layer sometimes inserts stray spaces
+// around '/' and '.' (seen on fee lines), so both are matched tolerantly.
+// ═══════════════════════════════════════════════════════════════════════
+function parseOCBC(text) {
+  const txs = [];
+  const AMT = '\\d{1,3}(?:\\s*,\\s*\\d{3})*\\s*\\.\\s*\\d{2}';
+  const RE = new RegExp(`^(\\d{1,2}\\s*/\\s*\\d{1,2})\\s+(.+?)\\s*(?:\\(\\s*(${AMT})\\s*\\)|(${AMT}))\\s*$`,'i');
+  const SKIP = /^(last month'?s balance|sub-?total|total|for:|new balance|minimum payment|statement date|payment due date|card number|important information)/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    const m = line.match(RE);
+    if (!m) continue;
+    const date = ddmmToDDMON(m[1].replace(/\s+/g,''));
+    const isCr = !!m[3];
+    const val = parseFloat((m[3]||m[4]).replace(/[\s,]/g,''));
+    const desc = cleanOCBCDesc(m[2]);
+    if (isNaN(val) || val<=0 || desc.length<2) continue;
+    txs.push({ date, description:desc, amount:isCr?-val:val, type:isCr?'credit':'debit' });
+  }
+  return txs;
+}
+
+// Collapses text-layer spacing glitches like "ADIDAS _ SG" -> "ADIDAS_SG"
+// before the shared trailing SINGAPORE/SG strip in cleanDesc().
+function cleanOCBCDesc(s) {
+  return cleanDesc((s||'').replace(/\s+([_\-*.])\s+/g, '$1'));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Generic fallback
+// ═══════════════════════════════════════════════════════════════════════
+function parseGeneric(text) {
+  const txs = [];
+  const MON = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*';
+  const PATS = [
+    new RegExp(`^(\\d{1,2}\\s+${MON}(?:\\s+\\d{2,4})?)\\s+(\\d{1,2}\\s+${MON}(?:\\s+\\d{2,4})?)\\s+(.+?)\\s+([\\d,]+\\.\\d{2})\\s*(CR|DR)?\\s*$`,'i'),
+    new RegExp(`^(\\d{1,2}\\s+${MON}(?:\\s+\\d{2,4})?)\\s+(.+?)\\s+\\(([\\d,]+\\.\\d{2})\\)\\s*$`,'i'),
+    new RegExp(`^(\\d{1,2}\\s+${MON}(?:\\s+\\d{2,4})?)\\s+(.+?)\\s+([\\d,]+\\.\\d{2})\\s*(CR|DR)?\\s*$`,'i'),
+    new RegExp(`^(\\d{1,2}[\\/-]\\d{1,2}[\\/-]\\d{2,4})\\s+(.+?)\\s+([\\d,]+\\.\\d{2})\\s*(CR|DR)?\\s*$`,'i'),
+  ];
+  const SKIP = /^(balance|total|sub-total|grand total|previous|opening|closing|page|statement|minimum|credit limit)/i;
+  const CREDIT_KW = /\b(cr\b|credit|deposit|salary|refund|cashback|giro in|received|reversal|payment received)\b/i;
+
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || SKIP.test(line)) continue;
+    for (const re of PATS) {
+      const m = line.match(re);
+      if (!m) continue;
+      const g = [...m].slice(1).filter(x=>x!==undefined);
+      let date, desc, val, isCr;
+      if (g.length>=4 && /^\d{1,2}\s+[A-Za-z]/.test(g[1]||'')) {
+        date = pickEarlierDate(g[0], g[1]); desc=g[2]; val=parseFloat(g[3].replace(/,/g,''));
+        isCr = (g[4]||'').toUpperCase()==='CR' || CREDIT_KW.test(desc);
+      } else {
+        date=g[0]; desc=g[1]; val=parseFloat((g[2]||'').replace(/,/g,''));
+        const crdr=(g[3]||'').toUpperCase();
+        isCr = crdr==='CR' || CREDIT_KW.test(desc);
+      }
+      if (isNaN(val)||val<=0||!desc||desc.length<2) break;
+      txs.push({ date:date.trim(), description:cleanDesc(desc), amount:isCr?-val:val, type:isCr?'credit':'debit' });
+      break;
+    }
+  }
+  return txs;
+}
+
+// ── Date utilities ─────────────────────────────────────────────────────────────
+const MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+function dateToNum(s) {
+  if (!s) return Infinity;
+  s = s.trim().toLowerCase();
+  let m = s.match(/^(\d{1,2})\s*([a-z]{3,})\s*(\d{2,4})?$/);
+  if (m) {
+    const mo = MONTHS[m[2].slice(0,3)]; if (!mo) return Infinity;
+    let y = m[3]?parseInt(m[3]):2025; if (y<100) y+=2000;
+    return y*10000+mo*100+parseInt(m[1]);
+  }
+  m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (m) { let y=parseInt(m[3]); if(y<100)y+=2000; return y*10000+parseInt(m[2])*100+parseInt(m[1]); }
+  return Infinity;
+}
+function pickEarlierDate(a,b){ return dateToNum(a)<=dateToNum(b)?a:b; }
+
+// Converts OCBC's "DD/MM" into the "DD MON" format every other parser outputs.
+const MON_ABBR = ['','JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+function ddmmToDDMON(s) {
+  const m = (s||'').match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (!m) return s;
+  const mon = MON_ABBR[parseInt(m[2],10)];
+  return mon ? `${m[1].padStart(2,'0')} ${mon}` : s;
+}
+
+// Normalizes a raw statement-date token ("01-07-2026", "22 Apr 2026", "01 JUL 26")
+// into the standard "DD MON YYYY" output format.
+function normalizeStatementDate(raw) {
+  raw = (raw||'').trim();
+  let m = raw.match(/^(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})$/);
+  if (m) {
+    const d = parseInt(m[1],10), mo = parseInt(m[2],10);
+    let y = parseInt(m[3],10); if (y<100) y+=2000;
+    return (mo>=1 && mo<=12) ? `${String(d).padStart(2,'0')} ${MON_ABBR[mo]} ${y}` : '';
+  }
+  m = raw.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{2,4})$/);
+  if (m) {
+    const mo = MONTHS[m[2].toLowerCase().slice(0,3)];
+    if (!mo) return '';
+    let y = parseInt(m[3],10); if (y<100) y+=2000;
+    return `${String(parseInt(m[1],10)).padStart(2,'0')} ${MON_ABBR[mo]} ${y}`;
+  }
+  return '';
+}
+
+// Finds the "Statement Date" label in the raw extracted text and returns the
+// nearest date-like token: same line first (e.g. "STATEMENT DATE : 01 JUL 26"),
+// then the next line (statements that put the label and value in separate,
+// vertically-stacked table cells, e.g. OCBC's header row / data row layout).
+function extractStatementDate(text) {
+  const DATE_TOKEN = /\d{1,2}\s*[\/\-]\s*\d{1,2}\s*[\/\-]\s*\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{2,4}/;
+  const lines = text.split('\n');
+  for (let i=0; i<lines.length; i++) {
+    if (!/STATEMENT\s+DATE/i.test(lines[i])) continue;
+    const afterLabel = lines[i].replace(/.*STATEMENT\s+DATE\s*:?\s*/i, '');
+    let m = afterLabel.match(DATE_TOKEN);
+    if (m) { const d = normalizeStatementDate(m[0]); if (d) return d; }
+    for (let j=i+1; j<=i+2 && j<lines.length; j++) {
+      const m2 = lines[j].match(DATE_TOKEN);
+      if (m2) { const d = normalizeStatementDate(m2[0]); if (d) return d; }
+    }
+  }
+  return '';
+}
+
+function cleanDesc(s) {
+  return (s||'').replace(/\s{2,}/g,' ')
+    .replace(/\s*(singapore|sg)\s*(sg)?\s*$/i,'')
+    .replace(/^\W+|\W+$/g,'').trim();
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+function renderPage() {
+  const start=(currentPage-1)*PAGE_SIZE;
+  tableBody.innerHTML='';
+  allTransactions.slice(start,start+PAGE_SIZE).forEach(tx => {
+    const cr=tx.amount<0;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="td-bank">${esc(tx.bank||'—')}</td><td class="td-date">${esc(tx.stmtDate||'—')}</td><td class="td-desc">${esc(tx.description||'—')}</td><td class="td-amt ${cr?'amt-cr':'amt-dr'}">${fmtAmt(tx.amount)}</td><td class="td-cat">${esc(tx.category||'—')}</td><td class="td-date">${esc(tx.date||'—')}</td>`;
+    tableBody.appendChild(tr);
+  });
+  const total=Math.ceil(allTransactions.length/PAGE_SIZE);
+  resultsMeta.textContent=`${allTransactions.length} transactions · page ${currentPage} of ${total}`;
+  renderPagination(total);
+}
+
+function renderPagination(total) {
+  paginationEl.innerHTML='';
+  if (total<=1) return;
+  paginationEl.append(
+    mkBtn('◀ Prev',currentPage===1,()=>{currentPage--;renderPage();}),
+    Object.assign(document.createElement('span'),{className:'pg-info',textContent:`${currentPage} / ${total}`}),
+    mkBtn('Next ▶',currentPage===total,()=>{currentPage++;renderPage();})
+  );
+}
+
+function mkBtn(label,disabled,fn){
+  const b=document.createElement('button');
+  b.className='pg-btn';b.textContent=label;b.disabled=disabled;b.addEventListener('click',fn);return b;
+}
+
+function renderSummary(txs) {
+  let tc=0,td=0;
+  txs.forEach(t=>t.amount<0?tc+=Math.abs(t.amount):td+=t.amount);
+  summaryEl.innerHTML=`
+    <div class="sum-card"><div class="sum-lbl">Transactions</div><div class="sum-val sv-n">${txs.length}</div></div>
+    <div class="sum-card"><div class="sum-lbl">Credits In (−)</div><div class="sum-val sv-c">${fmtCur(tc)}</div></div>
+    <div class="sum-card"><div class="sum-lbl">Debits Out (+)</div><div class="sum-val sv-d">${fmtCur(td)}</div></div>`;
+}
+
+// ── Export ─────────────────────────────────────────────────────────────────────
+exportBtn.addEventListener('click', () => {
+  if (currentMode === 'bank') exportBank();
+  else if (currentMode === 'bill') exportBill();
+  else exportPayslip();
+});
+
+function exportBank() {
+  if (!allTransactions.length) return;
+  const rows = allTransactions.map(t=>({'Bank':t.bank||'','Statement Date':t.stmtDate||'','Transaction Description':t.description,'Amount':t.amount,'Category':t.category||'','Transaction Date':t.date}));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols']=[{wch:20},{wch:16},{wch:55},{wch:14},{wch:14},{wch:16}];
+  const range=XLSX.utils.decode_range(ws['!ref']);
+  for (let R=1;R<=range.e.r;R++){
+    const c=ws[XLSX.utils.encode_cell({r:R,c:3})];
+    if(c){c.t='n';c.z='#,##0.00;[Red]-#,##0.00';}
+  }
+  ws['!autofilter'] = { ref: ws['!ref'] };
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Transactions');
+  const fname = selectedFiles.length===1 ? selectedFiles[0].name.replace(/\.pdf$/i,'')+'_transactions.xlsx' : 'bank_statements_transactions.xlsx';
+  XLSX.writeFile(wb, fname);
+}
+
+// ── Electricity/Water bill mode: render + export ──────────────────────────────
+// SP gas/water/refuse/subtotal figures come from a PDF layout that doesn't extract
+// reliably as plain text. Those cells are marked "review" and are directly editable
+// so they can be corrected against the original bill before exporting. Export always
+// reads the live (possibly edited) table content.
+function billCell(val, opts = {}) {
+  const review = opts.review ? ' review' : '';
+  const missing = val == null ? ' missing' : '';
+  const text = val == null ? '—' : (opts.prefix || '') + val.toFixed(opts.decimals != null ? opts.decimals : 2);
+  return `<td class="editable${review}${missing}" contenteditable="true" spellcheck="false" data-col="${opts.col || ''}">${text}</td>`;
+}
+function cellNum(td) {
+  if (!td) return null;
+  const n = parseFloat(td.textContent.replace(/[,$]/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+// Total Payable ($) = Elec ($) + SP Subtotal ($). Recomputed live if either is edited.
+function recomputeTotalPayable(tr) {
+  const elecTd = tr.querySelector('[data-col="elec"]');
+  const spTd = tr.querySelector('[data-col="spSubtotal"]');
+  const totalTd = tr.querySelector('[data-col="totalPayable"]');
+  if (!totalTd) return;
+  const elecVal = cellNum(elecTd), spVal = cellNum(spTd);
+  totalTd.textContent = (elecVal == null && spVal == null) ? '—' : ((elecVal || 0) + (spVal || 0)).toFixed(2);
+}
+tableBody.addEventListener('input', e => {
+  const col = e.target.dataset && e.target.dataset.col;
+  if (col === 'elec' || col === 'spSubtotal') recomputeTotalPayable(e.target.closest('tr'));
+});
+
+function renderBillResults(rows) {
+  tableBody.innerHTML = '';
+  rows.forEach(r => {
+    const g = r.geneco, s = r.sp;
+    const tr = document.createElement('tr');
+    const elec = g ? g.currentCharges : null;
+    const spSubtotal = s ? s.currentCharges : null;
+    const totalPayable = (elec == null && spSubtotal == null) ? null : (elec || 0) + (spSubtotal || 0);
+    tr.innerHTML =
+      `<td>${esc(r.label)}</td>` +
+      billCell(elec, { col: 'elec' }) +
+      billCell(g ? g.kwh : null, { decimals: g && g.kwh % 1 !== 0 ? 2 : 0, col: 'elecKwh' }) +
+      billCell(g ? g.rate : null, { decimals: 4, col: 'elecRate' }) +
+      billCell(s ? s.gasAmount : null, { review: true, col: 'gasAmount' }) +
+      billCell(s ? s.gasKwh : null, { decimals: 0, col: 'gasKwh' }) +
+      billCell(s ? s.gasRate : null, { decimals: 4, review: true, col: 'gasRate' }) +
+      billCell(s ? s.waterAmount : null, { review: true, col: 'waterAmount' }) +
+      billCell(s ? s.waterCuM : null, { decimals: 1, col: 'waterCuM' }) +
+      billCell(s ? s.refuseAmount : null, { review: true, col: 'refuseAmount' }) +
+      billCell(spSubtotal, { review: true, col: 'spSubtotal' }) +
+      billCell(totalPayable, { col: 'totalPayable' });
+    tableBody.appendChild(tr);
+  });
+  resultsMeta.textContent = `${rows.length} month${rows.length !== 1 ? 's' : ''}`;
+  reviewNote.classList.add('show');
+}
+
+function exportBill() {
+  const header1 = ['', 'Geneco Electricity', '', '', 'Gas', '', '', 'Water', '', 'Refuse', 'SP', ''];
+  const header2 = ['Date', 'Elec', 'kWh', '$/kWh', 'Gas b4 tax', 'kWh', '$/kWh', 'Water b4 tax', 'Cu M', 'Refuse b4 tax', 'Subtotal', 'Total Payable'];
+  const data = combinedRows.map((r, i) => {
+    const tds = tableBody.rows[i].cells;
+    return [r.date, ...Array.from(tds).slice(1).map(cellNum)];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([header1, header2, ...data]);
+  ws['!cols'] = header2.map(() => ({ wch: 13 }));
+  // Filter dropdowns on the real column-name row (row 2), not the grouping row above it.
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 1, c: 0 }, e: { r: range.e.r, c: range.e.c } }) };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Summary');
+  XLSX.writeFile(wb, 'Electricity Water Bill Summary.xlsx');
+}
+
+// ── Pay slip mode: render + export ────────────────────────────────────────────
+// Fixed, hand-picked field set only (not every field the parser extracts) —
+// column header uses the first name of each "A / B" pair the user specified.
+const PAYSLIP_DISPLAY_COLS = [
+  ['name', 'Name'],
+  ['designation', 'Designation'],
+  ['payPeriodDisplay', 'Pay Period'],
+  ['basicPay', 'Basic Pay'],
+  ['allowance', 'Allowance'],
+  ['overtime', 'Overtime'],
+  ['bonus', 'Bonus'],
+  ['grossPay', 'Gross Wages'],
+  ['employerCPF', 'Employer CPF'],
+  ['employeeCPF', 'Employee CPF'],
+  ['cdac', 'CDAC'],
+  ['skillDevLevy', 'Skill Development Levy'],
+  ['netPay', 'Nett Wages'],
+];
+function renderPayslipResults(rows) {
+  resultsThead.innerHTML = '<tr>' + PAYSLIP_DISPLAY_COLS.map(([, label]) => `<th>${esc(label)}</th>`).join('') + '</tr>';
+  tableBody.innerHTML = rows.map(r => {
+    const tds = PAYSLIP_DISPLAY_COLS.map(([key]) => {
+      const v = r[key];
+      if (v == null || v === '') return `<td class="psl-missing">—</td>`;
+      return `<td>${typeof v === 'number' ? fmtCur(v) : esc(v)}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+  resultsMeta.textContent = `${rows.length} pay slip${rows.length !== 1 ? 's' : ''}`;
+}
+function exportPayslip() {
+  if (!payslipRows.length) return;
+  const data = payslipRows.map(r => {
+    const row = {};
+    PAYSLIP_DISPLAY_COLS.forEach(([key, label]) => { row[label] = r[key] != null ? r[key] : ''; });
+    return row;
+  });
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!autofilter'] = { ref: ws['!ref'] };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Pay Slips');
+  const fname = selectedFiles.length === 1 ? selectedFiles[0].name.replace(/\.pdf$/i, '') + '_payslip.xlsx' : 'payslips_summary.xlsx';
+  XLSX.writeFile(wb, fname);
+}
+
+function setProg(pct,label){progressFill.style.width=pct+'%';progressLbl.textContent=label;}
+function showErr(msg){errorBox.textContent=msg;errorBox.classList.add('show');}
+function fmtAmt(n){const a=Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');return n<0?`(${a})`:a;}
+function fmtCur(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+</script>
+</body>
+</html>
