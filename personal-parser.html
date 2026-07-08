@@ -35,10 +35,16 @@ body{background:var(--paper);color:var(--ink);font-family:var(--serif);min-heigh
      than stopping wherever the shorter column's content happens to end. */
   .page-layout{grid-template-columns:var(--sidebar-w,210px) 14px 1fr;grid-template-areas:"sidebar handle main";gap:0;align-items:stretch;transition:grid-template-columns .18s ease;min-height:calc(100vh - 44px);}
   .page-layout.no-anim{transition:none;}
-  .resize-handle{display:flex;grid-area:handle;position:relative;align-items:center;justify-content:center;cursor:col-resize;}
+  /* Pinned to the viewport and scrolls its own content once it's taller than
+     the screen, instead of stretching to match a tall results table and
+     pushing its own lower controls (Advanced settings, debug) off-screen. */
+  .sidebar{position:sticky;top:20px;max-height:calc(100vh - 44px);overflow-y:auto;overflow-x:hidden;}
+  .resize-handle{display:flex;grid-area:handle;position:relative;align-items:flex-start;justify-content:center;cursor:col-resize;}
   .resize-handle::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--border);transform:translateX(-50%);}
   .resize-handle:hover::before{background:var(--gold);}
-  .collapse-toggle{position:relative;z-index:1;width:14px;height:26px;border-radius:7px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:9px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;}
+  /* Sticky to the viewport's vertical middle (not the full, possibly very tall,
+     page) so the handle stays reachable without scrolling to find it. */
+  .collapse-toggle{position:sticky;top:50vh;transform:translateY(-50%);z-index:1;width:14px;height:26px;border-radius:7px;border:1px solid var(--border);background:#fff;color:var(--muted);font-size:9px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:border-color .15s,color .15s;}
   .collapse-toggle:hover{border-color:var(--gold);color:var(--ink);}
 }
 /* Mode title (e.g. "Electricity & Water Bill Parser") must stay on one row —
@@ -46,8 +52,8 @@ body{background:var(--paper);color:var(--ink);font-family:var(--serif);min-heigh
 .sidebar h1{font-size:22px;white-space:nowrap;overflow:hidden;}
 
 /* Mode selector */
-.mode-select{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
-.mode-btn{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.03em;background:var(--cream);border:1px solid var(--border);border-radius:8px;padding:10px 16px;cursor:pointer;transition:all .15s;color:var(--muted);}
+.mode-select{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+.mode-btn{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.03em;background:var(--cream);border:1px solid var(--border);border-radius:8px;padding:7px 14px;cursor:pointer;transition:all .15s;color:var(--muted);}
 .mode-btn:hover{border-color:var(--gold);color:var(--ink);}
 .mode-btn.active{background:var(--ink);border-color:var(--ink);color:#fff;}
 
@@ -95,14 +101,14 @@ h1 em{color:var(--gold);font-style:normal;}
 .mode-icon{font-size:18px;flex-shrink:0;}
 .mode-text strong{display:block;font-weight:600;margin-bottom:1px;}
 
-/* Upload row: drop zone + parse button side by side */
-.upload-row{display:flex;align-items:stretch;gap:12px;margin-bottom:10px;}
-.upload-row .drop-zone{flex:1;margin-bottom:0;}
-.upload-row .parse-btn{width:auto;flex-shrink:0;margin-bottom:0;}
-.upload-row .clear-btn{width:auto;flex-shrink:0;margin-bottom:0;background:var(--cream);color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:15px 22px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:0.05em;cursor:pointer;transition:all .15s;}
-.upload-row .clear-btn:hover:not(:disabled){border-color:var(--red);color:var(--red);}
-.upload-row .clear-btn:disabled{opacity:.4;cursor:not-allowed;}
-@media(max-width:560px){.upload-row{flex-direction:column;}}
+/* Upload actions: PARSE + CLEAR buttons side by side, in the sidebar below
+   the drop zone (the drop zone gets its own row — too narrow a panel to fit
+   all three side by side like the old wide main-column layout did). */
+.upload-actions{display:flex;gap:8px;margin-bottom:14px;}
+.upload-actions .parse-btn{flex:1;margin-bottom:0;width:auto;}
+.upload-actions .clear-btn{flex-shrink:0;margin-bottom:0;background:var(--cream);color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:13px 14px;font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.03em;cursor:pointer;transition:all .15s;}
+.upload-actions .clear-btn:hover:not(:disabled){border-color:var(--red);color:var(--red);}
+.upload-actions .clear-btn:disabled{opacity:.4;cursor:not-allowed;}
 
 /* Drop zone */
 .drop-zone{border:2px dashed var(--border);border-radius:10px;background:var(--cream);padding:16px 20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;margin-bottom:10px;}
@@ -124,8 +130,8 @@ h1 em{color:var(--gold);font-style:normal;}
 /* Result category tabs — shown only when an auto-detected batch contains
    more than one document type, so each type's existing table/export UI
    stays reachable without a combined-table redesign. */
-.result-tabs{display:none;gap:8px;margin-bottom:14px;}
-.result-tab{font-family:var(--mono);font-size:11px;font-weight:600;background:var(--cream);border:1px solid var(--border);border-radius:7px;padding:7px 14px;cursor:pointer;color:var(--muted);transition:all .15s;}
+.result-tabs{display:none;gap:8px;margin-bottom:10px;}
+.result-tab{font-family:var(--mono);font-size:11px;font-weight:600;background:var(--cream);border:1px solid var(--border);border-radius:7px;padding:5px 12px;cursor:pointer;color:var(--muted);transition:all .15s;}
 .result-tab:hover{border-color:var(--gold);color:var(--ink);}
 .result-tab.active{background:var(--ink);border-color:var(--ink);color:#fff;}
 
@@ -192,11 +198,18 @@ h1 em{color:var(--gold);font-style:normal;}
 .results.show{display:block;}
 .results-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:12px;padding-bottom:10px;border-bottom:1px solid var(--border);}
 .results-title{font-size:20px;font-weight:700;}
-.results-meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;}
-.bank-detected{font-family:var(--mono);font-size:11px;color:var(--green);margin-top:2px;font-weight:600;}
-.ocr-detected{font-family:var(--mono);font-size:11px;color:var(--blue);margin-top:2px;font-weight:600;}
 .export-btn{background:var(--green);color:#fff;border:none;border-radius:6px;padding:9px 16px;font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:0.04em;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px;white-space:nowrap;}
 .export-btn:hover{background:#1e4d38;box-shadow:0 3px 10px rgba(45,106,79,0.25);}
+
+/* Parsed-result status — sidebar, not above the table, so the main column
+   stays dedicated to the table itself. */
+.parsed-status{margin-bottom:14px;}
+.parsed-status > div{margin-bottom:3px;}
+.parsed-status > div:last-child{margin-bottom:0;}
+.parsed-status > div:empty{display:none;}
+.results-meta{font-family:var(--mono);font-size:11px;color:var(--muted);}
+.bank-detected{font-family:var(--mono);font-size:11px;color:var(--green);font-weight:600;}
+.ocr-detected{font-family:var(--mono);font-size:11px;color:var(--blue);font-weight:600;}
 
 /* Summary */
 .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;}
@@ -210,6 +223,12 @@ h1 em{color:var(--gold);font-style:normal;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 thead{background:var(--ink);color:#fff;}
 th{padding:10px 14px;text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:0.08em;font-weight:600;}
+/* Only the header row that actually carries per-column data is clickable —
+   for the bill mode's two-row grouped header that's the second ("sub") row. */
+thead tr:last-child th{cursor:pointer;user-select:none;}
+thead tr:last-child th:hover{background:rgba(255,255,255,0.08);}
+th.sorted-asc::after{content:' \25B2';font-size:8px;vertical-align:2px;}
+th.sorted-desc::after{content:' \25BC';font-size:8px;vertical-align:1px;}
 td{padding:9px 14px;border-bottom:1px solid #f0f0f0;vertical-align:middle;}
 tbody tr:last-child td{border-bottom:none;}
 tbody tr:hover{background:#fafafa;}
@@ -286,7 +305,7 @@ td.psl-missing{color:var(--muted);}
   <div class="page-layout">
     <div class="main-col">
 
-  <!-- Parser mode selector — swaps drop-zone copy, results table, sidebar info -->
+  <!-- Parser mode selector — swaps drop-zone copy, results table, sidebar info. -->
   <div class="mode-select" id="modeSelect">
     <button class="mode-btn active" id="mode-auto" data-mode="auto" type="button">🔀 Auto-Detect</button>
     <button class="mode-btn" id="mode-bank" data-mode="bank" type="button">🏦 Bank Statement</button>
@@ -315,34 +334,14 @@ td.psl-missing{color:var(--muted);}
     </div>
   </div>
 
-  <div class="upload-row">
-    <div class="drop-zone" id="dropZone">
-      <span class="drop-icon" id="dropIcon">🏦</span>
-      <div class="drop-label" id="dropLabel">Drop your PDF bank statement here</div>
-      <div class="drop-hint" id="dropHint">one or multiple PDF files · click to browse · 100% local, never sent to the cloud</div>
-      <input type="file" id="fileInput" accept=".pdf" multiple>
-    </div>
-
-    <button class="parse-btn" id="parseBtn" disabled>
-      <span class="btn-ico">▶</span>
-      <div class="spinner"></div>
-      <span id="parseBtnTxt">PARSE STATEMENT</span>
-    </button>
-
-    <button class="clear-btn" id="clearBtn" type="button" disabled>✕ CLEAR FILES</button>
-  </div>
-
   <div class="error-box" id="errorBox"></div>
   <div class="warn-box" id="warnBox"></div>
 
   <div class="results" id="results">
     <div class="result-tabs" id="resultTabs"></div>
     <div class="results-header">
-      <div>
+      <div class="results-title-block">
         <div class="results-title" id="resultsTitle">Transactions</div>
-        <div class="results-meta" id="resultsMeta">—</div>
-        <div class="bank-detected" id="bankDetected"></div>
-        <div class="ocr-detected" id="ocrDetected"></div>
       </div>
       <button class="export-btn" id="exportBtn">⬇ Export to Excel</button>
     </div>
@@ -373,6 +372,35 @@ td.psl-missing{color:var(--muted);}
       <header>
         <h1 id="pageTitle">Bank <em>Statement</em> Parser</h1>
       </header>
+
+      <!-- Drop zone + pending-file chips + PARSE/CLEAR live in the left panel
+           so the (wider) main column is free to show the results table. -->
+      <div class="drop-zone" id="dropZone">
+        <span class="drop-icon" id="dropIcon">🏦</span>
+        <div class="drop-label" id="dropLabel">Drop your PDF bank statement here</div>
+        <div class="drop-hint" id="dropHint">one or multiple PDF files · click to browse · 100% local, never sent to the cloud</div>
+        <input type="file" id="fileInput" accept=".pdf" multiple>
+      </div>
+
+      <div class="file-list" id="fileList"></div>
+
+      <div class="upload-actions">
+        <button class="parse-btn" id="parseBtn" disabled>
+          <span class="btn-ico">▶</span>
+          <div class="spinner"></div>
+          <span id="parseBtnTxt">PARSE STATEMENT</span>
+        </button>
+        <button class="clear-btn" id="clearBtn" type="button" disabled>✕ CLEAR FILES</button>
+      </div>
+
+      <!-- Parsed-result status (counts, detected banks/formats, OCR notice) —
+           lives here instead of above the table so the main column stays
+           dedicated to just the table. -->
+      <div class="parsed-status" id="parsedStatus">
+        <div class="results-meta" id="resultsMeta">—</div>
+        <div class="bank-detected" id="bankDetected"></div>
+        <div class="ocr-detected" id="ocrDetected"></div>
+      </div>
 
       <!-- Optional Mistral OCR API key — stored only in this browser's localStorage,
            never written to source. Used for image-based PDFs when present; falls
@@ -417,8 +445,6 @@ td.psl-missing{color:var(--muted);}
           <div class="ocr-preview-scroll" id="ocrPreviewScroll"></div>
         </div>
       </div>
-
-      <div class="file-list" id="fileList"></div>
     </aside>
   </div>
 </div>
@@ -453,6 +479,19 @@ let allParsedBills = []; // raw per-file bill objects (pre-combineBills) — kep
                           // month's Geneco/SP pairing).
 let payslipRows = [];  // payslip mode
 let currentMode = 'auto';
+let autoActiveCategory = null; // which auto-detect result tab (bank/bill/payslip) was last viewed
+// True right after a completed auto-detect run (so the "Done" label's expand
+// panel shows every category in that batch); false after a dedicated-mode
+// run (so it shows just that mode's own files, not a stale auto-detect batch
+// left over from earlier in the session — modes now retain state independently).
+let lastDoneIsAuto = false;
+// Column-sort state per mode: idx = column index in that mode's header row
+// (-1 for payslip means "no visible column selected, use the default pay-
+// period-based key"), dir = 1 ascending / -1 descending. Defaults match the
+// oldest-to-latest ordering requested for statement/pay-slip date.
+let bankSort = { idx: 1, dir: 1 };
+let billSort = { idx: 0, dir: 1 };
+let payslipSort = { idx: -1, dir: 1 };
 let autoResults = null; // { bank: {transactions}, bill: {rows}, payslip: {rows} } — populated by runAutoParse
 
 // True once there's anything a "Clear Files" click would actually need to clear —
@@ -623,13 +662,59 @@ function applyModeChrome(mode) {
   resultsThead.innerHTML = mode === 'bank' ? THEAD_BANK : (mode === 'bill' ? THEAD_BILL : '');
   $('mistralBankNote').classList.toggle('show', mode === 'bank');
 }
+// Re-renders whichever data the target mode already has accumulated (or
+// hides the results panel if it has none yet) — each mode keeps its own
+// state across tab switches now; only "Clear Files" wipes it.
+function renderModeResults(mode) {
+  resultsMeta.textContent = ''; bankDetectedEl.textContent = ''; ocrDetectedEl.textContent = '';
+  reviewNote.classList.remove('show');
+  let hasData = false;
+  if (mode === 'bank') {
+    hasData = allTransactions.length > 0;
+    if (hasData) {
+      sortBankRows(); currentPage = 1;
+      renderPage(); renderSummary(allTransactions); markSortedHeader(bankSort.idx, bankSort.dir);
+      const banks = [...new Set(allTransactions.map(t => t.bank))];
+      bankDetectedEl.textContent = '✓ Banks: ' + banks.join(', ');
+    } else {
+      tableBody.innerHTML = ''; summaryEl.innerHTML = ''; paginationEl.innerHTML = '';
+    }
+  } else if (mode === 'bill') {
+    hasData = combinedRows.length > 0;
+    if (hasData) { sortBillRows(); renderBillResults(combinedRows); markSortedHeader(billSort.idx, billSort.dir); }
+    else tableBody.innerHTML = '';
+  } else if (mode === 'payslip') {
+    hasData = payslipRows.length > 0;
+    if (hasData) {
+      sortPayslipRows();
+      renderPayslipResults(payslipRows); markSortedHeader(payslipSort.idx, payslipSort.dir);
+      const formats = [...new Set(payslipRows.map(p => p.format))];
+      bankDetectedEl.textContent = '✓ Formats: ' + formats.join(', ');
+    } else tableBody.innerHTML = '';
+  } else if (mode === 'auto') {
+    hasData = !!autoResults;
+    if (hasData) {
+      const known = ['bank', 'bill', 'payslip'].filter(k => autoResults[k]);
+      renderResultTabs(known);
+      activateAutoCategory(autoActiveCategory && known.includes(autoActiveCategory) ? autoActiveCategory : known[0]);
+    } else {
+      resultTabs.innerHTML = ''; resultTabs.style.display = 'none'; tableBody.innerHTML = '';
+    }
+  }
+  results.classList.toggle('show', hasData);
+}
 function switchMode(mode) {
   currentMode = mode;
   highlightModeButton(mode);
   applyModeChrome(mode);
   selectedFiles = []; fileInput.value = '';
-  fileList.innerHTML = ''; parseBtn.disabled = true; clearBtn.disabled = true;
-  clearUI(); highlightBank('');
+  dropZone.style.display = ''; dropZone.style.padding = '';
+  fileList.innerHTML = '';
+  clearTransientUI();
+  highlightBank('');
+  renderModeResults(mode);
+  parseBtn.disabled = true;
+  clearBtn.disabled = !hasAnyResults();
 }
 document.querySelectorAll('.mode-btn').forEach(b => b.addEventListener('click', () => switchMode(b.dataset.mode)));
 switchMode('auto');
@@ -796,7 +881,9 @@ function clearUI() {
   tableBody.innerHTML=''; summaryEl.innerHTML=''; paginationEl.innerHTML='';
   bankDetectedEl.textContent=''; ocrDetectedEl.textContent='';
   allTransactions=[]; detectedBank=''; combinedRows=[]; allParsedBills=[]; payslipRows=[];
-  resultTabs.innerHTML=''; resultTabs.style.display='none'; autoResults=null;
+  resultTabs.innerHTML=''; resultTabs.style.display='none'; autoResults=null; autoActiveCategory=null;
+  lastDoneIsAuto = false;
+  bankSort = { idx: 1, dir: 1 }; billSort = { idx: 0, dir: 1 }; payslipSort = { idx: -1, dir: 1 };
 }
 function showWarn(msg) { warnBox.textContent = (warnBox.textContent ? warnBox.textContent + '\n' : '') + msg; warnBox.classList.add('show'); }
 
@@ -805,9 +892,17 @@ function showWarn(msg) { warnBox.textContent = (warnBox.textContent ? warnBox.te
 // files), so this de-dupes back down to the actual source files per category.
 function getParsedFilenames() {
   const groups = {};
-  if (autoResults?.bank?.transactions?.length) groups.bank = [...new Set(autoResults.bank.transactions.map(t => t.file))];
-  if (autoResults?.bill?.rows?.length) groups.bill = [...new Set(autoResults.bill.rows.flatMap(r => r.files || []))];
-  if (autoResults?.payslip?.rows?.length) groups.payslip = [...new Set(autoResults.payslip.rows.map(r => r.file))];
+  if (lastDoneIsAuto && autoResults) {
+    if (autoResults.bank?.transactions?.length) groups.bank = [...new Set(autoResults.bank.transactions.map(t => t.file))];
+    if (autoResults.bill?.rows?.length) groups.bill = [...new Set(autoResults.bill.rows.flatMap(r => r.files || []))];
+    if (autoResults.payslip?.rows?.length) groups.payslip = [...new Set(autoResults.payslip.rows.map(r => r.file))];
+    return groups;
+  }
+  // Dedicated-mode run — show just the mode currently being viewed (the
+  // progress label, and thus this click, only exists while still on it).
+  if (currentMode === 'bank' && allTransactions.length) groups.bank = [...new Set(allTransactions.map(t => t.file))];
+  if (currentMode === 'bill' && combinedRows.length) groups.bill = [...new Set(combinedRows.flatMap(r => r.files || []))];
+  if (currentMode === 'payslip' && payslipRows.length) groups.payslip = [...new Set(payslipRows.map(r => r.file))];
   return groups;
 }
 function renderParsedFilesPanel() {
@@ -943,12 +1038,14 @@ async function runBankParse() {
     } else {
       setProg(98, 'Rendering…');
       allTransactions = allTransactions.concat(combinedTransactions); currentPage = 1;
-      renderPage(); renderSummary(allTransactions);
+      sortBankRows();
+      renderPage(); renderSummary(allTransactions); markSortedHeader(bankSort.idx, bankSort.dir);
       const banks = [...new Set(allTransactions.map(t=>t.bank))];
       bankDetectedEl.textContent = '✓ Banks: ' + banks.join(', ');
       ocrDetectedEl.textContent = anyOCR ? '🔍 OCR used on one or more files' : `📄 ${total} file${total>1?'s':''} processed`;
       results.classList.add('show');
       setProg(100, `Done — ${combinedTransactions.length} new transaction${combinedTransactions.length>1?'s':''} added (${allTransactions.length} total)`);
+      progressLbl.classList.add('done'); lastDoneIsAuto = false;
       commitParsedFiles();
     }
   }
@@ -1262,8 +1359,15 @@ function parseMonthYear(text) {
   return { monthName, year, key: monthName + '-' + year, label: monthName + ' ' + year, date: new Date(`${monthName} 1, ${year}`) };
 }
 
+// \s+ (not literal spaces) between words — Auto-Detect classifies off
+// extractLayoutText's output, which inserts real line breaks at each visual
+// row. Some SP bills wrap "Gas Services" / "Water Services" onto their own
+// line above "by City Energy..." / "by Public Utilities Board", so a literal-
+// space match (fine against Bill mode's extractPagesBill, which flattens
+// every page to one space-joined line) missed them here and the file fell
+// through to "unknown" instead of being routed to the bill parser.
 function detectBillType(text) {
-  if (/Gas Services by City Energy|Water Services by Public Utilities Board/i.test(text)) return 'sp';
+  if (/Gas\s+Services\s+by\s+City\s+Energy|Water\s+Services\s+by\s+Public\s+Utilities\s+Board/i.test(text)) return 'sp';
   if (/Geneco|Seraya Energy/i.test(text)) return 'geneco';
   return 'unknown';
 }
@@ -1417,12 +1521,15 @@ async function runBillParse() {
   } else {
     allParsedBills = allParsedBills.concat(parsedBills);
     combinedRows = combineBills(allParsedBills);
+    sortBillRows();
     const missing = combinedRows.filter(r => !r.geneco || !r.sp)
       .map(r => `${r.label}: missing ${!r.geneco ? 'electricity (Geneco)' : ''}${!r.geneco && !r.sp ? ' & ' : ''}${!r.sp ? 'gas/water (SP)' : ''} bill`);
     if (missing.length) showWarn(missing.join('\n'));
     renderBillResults(combinedRows);
+    markSortedHeader(billSort.idx, billSort.dir);
     results.classList.add('show');
     setProg(100, `Done — ${parsedBills.length} new file(s) parsed (${combinedRows.length} month(s) total)`);
+    progressLbl.classList.add('done'); lastDoneIsAuto = false;
     commitParsedFiles();
   }
 }
@@ -1955,12 +2062,15 @@ async function runPayslipParse() {
       : 'No pay slips could be parsed. Expand "Show extracted raw text" to inspect what was read.');
   } else {
     payslipRows = payslipRows.concat(parsed);
+    sortPayslipRows();
     renderPayslipResults(payslipRows);
+    markSortedHeader(payslipSort.idx, payslipSort.dir);
     const formats = [...new Set(payslipRows.map(p => p.format))];
     bankDetectedEl.textContent = '✓ Formats: ' + formats.join(', ');
     ocrDetectedEl.textContent = `📄 ${payslipRows.length} pay slip${payslipRows.length > 1 ? 's' : ''} total`;
     results.classList.add('show');
     setProg(100, `Done — ${parsed.length} new pay slip${parsed.length > 1 ? 's' : ''} added (${payslipRows.length} total)`);
+    progressLbl.classList.add('done'); lastDoneIsAuto = false;
     commitParsedFiles();
   }
 }
@@ -2118,7 +2228,7 @@ async function runAutoParse() {
   results.classList.add('show');
   const counts = known.map(k => `${k} (${k === 'bank' ? autoResults.bank.transactions.length : autoResults[k].rows.length})`);
   setProg(100, `Done — ${counts.join(', ')}`);
-  progressLbl.classList.add('done');
+  progressLbl.classList.add('done'); lastDoneIsAuto = true;
   commitParsedFiles();
 }
 
@@ -2134,20 +2244,27 @@ function renderResultTabs(categories) {
 }
 function activateAutoCategory(cat) {
   currentMode = cat;
+  autoActiveCategory = cat;
   applyModeChrome(cat);
   resultTabs.querySelectorAll('.result-tab').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
   highlightBank('');
+  reviewNote.classList.toggle('show', cat === 'bill');
   if (cat === 'bank') {
     allTransactions = autoResults.bank.transactions; currentPage = 1;
-    renderPage(); renderSummary(allTransactions);
+    sortBankRows();
+    renderPage(); renderSummary(allTransactions); markSortedHeader(bankSort.idx, bankSort.dir);
     const banks = [...new Set(allTransactions.map(t => t.bank))];
     bankDetectedEl.textContent = '✓ Banks: ' + banks.join(', ');
   } else if (cat === 'bill') {
     combinedRows = autoResults.bill.rows;
+    sortBillRows();
     renderBillResults(combinedRows);
+    markSortedHeader(billSort.idx, billSort.dir);
   } else if (cat === 'payslip') {
     payslipRows = autoResults.payslip.rows;
+    sortPayslipRows();
     renderPayslipResults(payslipRows);
+    markSortedHeader(payslipSort.idx, payslipSort.dir);
     const formats = [...new Set(payslipRows.map(p => p.format))];
     bankDetectedEl.textContent = '✓ Formats: ' + formats.join(', ');
   }
@@ -3398,6 +3515,93 @@ function exportPayslip() {
   const fname = selectedFiles.length === 1 ? selectedFiles[0].name.replace(/\.pdf$/i, '') + '_payslip.xlsx' : 'payslips_summary.xlsx';
   XLSX.writeFile(wb, fname);
 }
+
+// ── Column sorting (click any header to sort; click again to reverse) ─────────
+// Blank/unparseable values always sort to the end, regardless of direction —
+// only real values swap order between ascending and descending.
+function sortByGetter(arr, getter, dir) {
+  arr.sort((a, b) => {
+    const av = getter(a), bv = getter(b);
+    const aNil = av == null || av === '' || (typeof av === 'number' && !Number.isFinite(av));
+    const bNil = bv == null || bv === '' || (typeof bv === 'number' && !Number.isFinite(bv));
+    if (aNil && bNil) return 0;
+    if (aNil) return 1;
+    if (bNil) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') return dir * (av - bv);
+    return dir * String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
+function toggleSort(state, idx) {
+  if (state.idx === idx) state.dir *= -1; else { state.idx = idx; state.dir = 1; }
+}
+// Clears sort arrows from every header, then marks the active column (if any
+// — payslip's default state has no visible column selected).
+function markSortedHeader(idx, dir) {
+  resultsThead.querySelectorAll('th').forEach(th => th.classList.remove('sorted-asc', 'sorted-desc'));
+  if (idx == null || idx < 0) return;
+  const lastRow = resultsThead.rows[resultsThead.rows.length - 1];
+  const th = lastRow && lastRow.children[idx];
+  if (th) th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
+}
+
+// Bank Statement columns: BANK / STATEMENT DATE / TRANSACTION DESCRIPTION / AMOUNT / CATEGORY / TRANSACTION DATE
+const BANK_SORT_GETTERS = [
+  t => t.bank, t => dateToNum(t.stmtDate), t => t.description, t => t.amount, t => t.category, t => dateToNum(t.date),
+];
+function sortBankRows() { sortByGetter(allTransactions, BANK_SORT_GETTERS[bankSort.idx], bankSort.dir); }
+
+// Bill columns: Date / Elec($) / kWh / $per kWh / Gas($) / kWh / $per kWh / Water($) / Cu M / Refuse($) / Subtotal($) / Total Payable($)
+const BILL_SORT_GETTERS = [
+  r => +r.date,
+  r => r.geneco && r.geneco.currentCharges, r => r.geneco && r.geneco.kwh, r => r.geneco && r.geneco.rate,
+  r => r.sp && r.sp.gasAmount, r => r.sp && r.sp.gasKwh, r => r.sp && r.sp.gasRate,
+  r => r.sp && r.sp.waterAmount, r => r.sp && r.sp.waterCuM,
+  r => r.sp && r.sp.refuseAmount,
+  r => r.sp && r.sp.currentCharges,
+  r => {
+    const e = r.geneco && r.geneco.currentCharges, s = r.sp && r.sp.currentCharges;
+    return (e == null && s == null) ? null : (e || 0) + (s || 0);
+  },
+];
+function sortBillRows() { sortByGetter(combinedRows, BILL_SORT_GETTERS[billSort.idx], billSort.dir); }
+
+// Pay slip columns come straight from PAYSLIP_DISPLAY_COLS. The "Pay Period"
+// column doesn't hold a real date (it's a display string like "JUN-2026" or a
+// legacy date range), so it — and the default (no column clicked) state —
+// both sort by the same derived chronological key instead of raw text.
+function payslipDateKey(r) {
+  if (r.periodFrom) { const n = dateToNum(r.periodFrom); if (Number.isFinite(n)) return n; }
+  const my = (r.payPeriodDisplay || '').match(/^([A-Za-z]{3})[a-z]*[\s-]+(\d{4})/i);
+  if (my) { const mo = MONTHS[my[1].toLowerCase()]; if (mo) return +my[2] * 10000 + mo * 100 + 1; }
+  return dateToNum(r.issueDate);
+}
+function payslipGetter(idx) {
+  if (idx == null || idx < 0) return payslipDateKey;
+  const key = PAYSLIP_DISPLAY_COLS[idx][0];
+  return key === 'payPeriodDisplay' ? payslipDateKey : (r => r[key]);
+}
+function sortPayslipRows() { sortByGetter(payslipRows, payslipGetter(payslipSort.idx), payslipSort.dir); }
+
+// Only the last row of the header is ever sortable — for bank/payslip that's
+// their one and only row; for the bill mode's two-row grouped header that's
+// the "sub" row carrying the actual per-column labels, not the "grp" row.
+resultsThead.addEventListener('click', e => {
+  const th = e.target.closest('th');
+  if (!th) return;
+  const row = th.parentElement;
+  if (row !== resultsThead.rows[resultsThead.rows.length - 1]) return;
+  const idx = Array.from(row.children).indexOf(th);
+  if (currentMode === 'bank' && allTransactions.length) {
+    toggleSort(bankSort, idx); sortBankRows(); currentPage = 1;
+    renderPage(); renderSummary(allTransactions); markSortedHeader(bankSort.idx, bankSort.dir);
+  } else if (currentMode === 'bill' && combinedRows.length) {
+    toggleSort(billSort, idx); sortBillRows();
+    renderBillResults(combinedRows); markSortedHeader(billSort.idx, billSort.dir);
+  } else if (currentMode === 'payslip' && payslipRows.length) {
+    toggleSort(payslipSort, idx); sortPayslipRows();
+    renderPayslipResults(payslipRows); markSortedHeader(payslipSort.idx, payslipSort.dir);
+  }
+});
 
 function setProg(pct,label){progressFill.style.width=pct+'%';progressLbl.textContent=label;}
 function showErr(msg){errorBox.textContent=msg;errorBox.classList.add('show');}
