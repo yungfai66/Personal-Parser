@@ -519,8 +519,8 @@ const catSettingsBlock=$('catSettingsBlock');
 const pageTitle=$('pageTitle'), modeBadges=$('modeBadges');
 const resultTabs=$('resultTabs');
 const THEAD_BANK = resultsThead.innerHTML;
-const THEAD_BILL = '<tr class="grp"><th></th><th colspan="3" class="grp-elec">Geneco Electricity</th><th colspan="3" class="grp-gas">Gas</th><th colspan="2" class="grp-water">Water</th><th class="grp-refuse">Refuse</th><th class="grp-sp">SP</th></tr>'
-  + '<tr class="sub"><th>Date</th><th class="grp-elec">Elec ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-gas">Gas ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-water">Water ($)</th><th>Cu M</th><th class="grp-refuse">Refuse ($)</th><th class="grp-sp">Subtotal ($)</th></tr>';
+const THEAD_BILL = '<tr class="grp"><th></th><th colspan="3" class="grp-elec">Geneco Electricity</th><th colspan="3" class="grp-gas">Gas</th><th colspan="2" class="grp-water">Water</th><th class="grp-refuse">Refuse</th><th class="grp-sp">SP</th><th></th></tr>'
+  + '<tr class="sub"><th>Date</th><th class="grp-elec">Elec ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-gas">Gas ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-water">Water ($)</th><th>Cu M</th><th class="grp-refuse">Refuse ($)</th><th class="grp-sp">Subtotal ($)</th><th>Total Utility Amt ($)</th></tr>';
 
 // ── Sidebar resize / collapse ───────────────────────────────────────────────
 const pageLayoutEl = document.querySelector('.page-layout');
@@ -3413,6 +3413,20 @@ function cellNum(td) {
   const n = parseFloat(td.textContent.replace(/[,$]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
+// Total Utility Amt ($) = Elec ($) + SP Subtotal ($). Recomputed live if either is edited.
+function recomputeTotalUtilityAmt(tr) {
+  const elecTd = tr.querySelector('[data-col="elec"]');
+  const spTd = tr.querySelector('[data-col="spSubtotal"]');
+  const totalTd = tr.querySelector('[data-col="totalUtilityAmt"]');
+  if (!totalTd) return;
+  const elecVal = cellNum(elecTd), spVal = cellNum(spTd);
+  totalTd.textContent = (elecVal == null && spVal == null) ? '—' : ((elecVal || 0) + (spVal || 0)).toFixed(2);
+}
+tableBody.addEventListener('input', e => {
+  const col = e.target.dataset && e.target.dataset.col;
+  if (col === 'elec' || col === 'spSubtotal') recomputeTotalUtilityAmt(e.target.closest('tr'));
+});
+
 function renderBillResults(rows) {
   tableBody.innerHTML = '';
   rows.forEach(r => {
@@ -3420,6 +3434,7 @@ function renderBillResults(rows) {
     const tr = document.createElement('tr');
     const elec = g ? g.currentCharges : null;
     const spSubtotal = s ? s.currentCharges : null;
+    const totalUtilityAmt = (elec == null && spSubtotal == null) ? null : (elec || 0) + (spSubtotal || 0);
     tr.innerHTML =
       `<td>${esc(r.label)}</td>` +
       billCell(elec, { col: 'elec' }) +
@@ -3431,7 +3446,8 @@ function renderBillResults(rows) {
       billCell(s ? s.waterAmount : null, { review: true, col: 'waterAmount' }) +
       billCell(s ? s.waterCuM : null, { decimals: 1, col: 'waterCuM' }) +
       billCell(s ? s.refuseAmount : null, { review: true, col: 'refuseAmount' }) +
-      billCell(spSubtotal, { review: true, col: 'spSubtotal' });
+      billCell(spSubtotal, { review: true, col: 'spSubtotal' }) +
+      billCell(totalUtilityAmt, { col: 'totalUtilityAmt' });
     tableBody.appendChild(tr);
   });
   resultsMeta.textContent = `${rows.length} month${rows.length !== 1 ? 's' : ''}`;
@@ -3439,8 +3455,8 @@ function renderBillResults(rows) {
 }
 
 function exportBill() {
-  const header1 = ['', 'Geneco Electricity', '', '', 'Gas', '', '', 'Water', '', 'Refuse', 'SP'];
-  const header2 = ['Date', 'Elec', 'kWh', '$/kWh', 'Gas b4 tax', 'kWh', '$/kWh', 'Water b4 tax', 'Cu M', 'Refuse b4 tax', 'Subtotal'];
+  const header1 = ['', 'Geneco Electricity', '', '', 'Gas', '', '', 'Water', '', 'Refuse', 'SP', ''];
+  const header2 = ['Date', 'Elec', 'kWh', '$/kWh', 'Gas b4 tax', 'kWh', '$/kWh', 'Water b4 tax', 'Cu M', 'Refuse b4 tax', 'Subtotal', 'Total Utility Amt'];
   const data = combinedRows.map((r, i) => {
     const tds = tableBody.rows[i].cells;
     return [r.date, ...Array.from(tds).slice(1).map(cellNum)];
@@ -3534,7 +3550,7 @@ const BANK_SORT_GETTERS = [
 ];
 function sortBankRows() { sortByGetter(allTransactions, BANK_SORT_GETTERS[bankSort.idx], bankSort.dir); }
 
-// Bill columns: Date / Elec($) / kWh / $per kWh / Gas($) / kWh / $per kWh / Water($) / Cu M / Refuse($) / Subtotal($)
+// Bill columns: Date / Elec($) / kWh / $per kWh / Gas($) / kWh / $per kWh / Water($) / Cu M / Refuse($) / Subtotal($) / Total Utility Amt($)
 const BILL_SORT_GETTERS = [
   r => +r.date,
   r => r.geneco && r.geneco.currentCharges, r => r.geneco && r.geneco.kwh, r => r.geneco && r.geneco.rate,
@@ -3542,6 +3558,10 @@ const BILL_SORT_GETTERS = [
   r => r.sp && r.sp.waterAmount, r => r.sp && r.sp.waterCuM,
   r => r.sp && r.sp.refuseAmount,
   r => r.sp && r.sp.currentCharges,
+  r => {
+    const e = r.geneco && r.geneco.currentCharges, s = r.sp && r.sp.currentCharges;
+    return (e == null && s == null) ? null : (e || 0) + (s || 0);
+  },
 ];
 function sortBillRows() { sortByGetter(combinedRows, BILL_SORT_GETTERS[billSort.idx], billSort.dir); }
 
