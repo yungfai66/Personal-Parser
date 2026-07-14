@@ -268,6 +268,7 @@ td.missing{color:var(--muted);font-style:italic;}
 .grp-water{border-left:2px solid var(--blue);}
 .grp-refuse{border-left:2px solid var(--blue);}
 .grp-sp{border-left:2px solid var(--green);}
+.grp-total{border-left:2px solid var(--ink);}
 
 /* Payslip-mode table */
 table.payslip-table td,table.payslip-table th{white-space:nowrap;}
@@ -519,8 +520,8 @@ const catSettingsBlock=$('catSettingsBlock');
 const pageTitle=$('pageTitle'), modeBadges=$('modeBadges');
 const resultTabs=$('resultTabs');
 const THEAD_BANK = resultsThead.innerHTML;
-const THEAD_BILL = '<tr class="grp"><th></th><th colspan="3" class="grp-elec">Geneco Electricity</th><th colspan="3" class="grp-gas">Gas</th><th colspan="2" class="grp-water">Water</th><th class="grp-refuse">Refuse</th><th class="grp-sp">SP</th><th></th></tr>'
-  + '<tr class="sub"><th>Date</th><th class="grp-elec">Elec ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-gas">Gas ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-water">Water ($)</th><th>Cu M</th><th class="grp-refuse">Refuse ($)</th><th class="grp-sp">Subtotal ($)</th><th>Total Utility Amt ($)</th></tr>';
+const THEAD_BILL = '<tr class="grp"><th></th><th colspan="3" class="grp-elec">Geneco Electricity</th><th colspan="3" class="grp-gas">Gas</th><th colspan="2" class="grp-water">Water</th><th class="grp-refuse">Refuse</th><th class="grp-sp">SP</th><th class="grp-total">Total</th></tr>'
+  + '<tr class="sub"><th>Date</th><th class="grp-elec">Elec ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-gas">Gas ($)</th><th>kWh</th><th>$/kWh</th><th class="grp-water">Water ($)</th><th>Cu M</th><th class="grp-refuse">Refuse ($)</th><th class="grp-sp">Subtotal ($)</th><th class="grp-total">Utility Amt ($)</th></tr>';
 
 // ── Sidebar resize / collapse ───────────────────────────────────────────────
 const pageLayoutEl = document.querySelector('.page-layout');
@@ -3460,8 +3461,8 @@ function renderBillResults(rows) {
 }
 
 function exportBill() {
-  const header1 = ['', 'Geneco Electricity', '', '', 'Gas', '', '', 'Water', '', 'Refuse', 'SP', ''];
-  const header2 = ['Date', 'Elec', 'kWh', '$/kWh', 'Gas b4 tax', 'kWh', '$/kWh', 'Water b4 tax', 'Cu M', 'Refuse b4 tax', 'Subtotal', 'Total Utility Amt'];
+  const header1 = ['', 'Geneco Electricity', '', '', 'Gas', '', '', 'Water', '', 'Refuse', 'SP', 'Total'];
+  const header2 = ['Date', 'Elec', 'kWh', '$/kWh', 'Gas b4 tax', 'kWh', '$/kWh', 'Water b4 tax', 'Cu M', 'Refuse b4 tax', 'Subtotal', 'Utility Amt'];
   const data = combinedRows.map((r, i) => {
     const tds = tableBody.rows[i].cells;
     return [r.date, ...Array.from(tds).slice(1).map(cellNum)];
