@@ -2185,9 +2185,14 @@ async function runAutoParse() {
     const parsedBills = [];
     for (const { file, text, pages } of buckets.bill) {
       const type = detectBillType(text);
+      // detectBillType runs on the layout-reconstructed `text` (see extractLayoutText's
+      // comment), but the parsers themselves are written against the flat, space-joined
+      // page text Bill mode feeds them — layout text re-orders/splits lines (e.g. across
+      // a two-column box), which silently broke the SP "Current Charges" regex here.
+      const flatText = pages.join('\n\n');
       let bill = null;
-      if (type === 'geneco') bill = parseGeneco(text);
-      else if (type === 'sp') bill = parseSP(pages, text);
+      if (type === 'geneco') bill = parseGeneco(flatText);
+      else if (type === 'sp') bill = parseSP(pages, flatText);
       if (bill && bill.monthYear) { bill.sourceFile = file.name; parsedBills.push(bill); }
     }
     if (parsedBills.length) {
