@@ -1054,6 +1054,12 @@ async function runBankParse() {
 }
 
 // ── Text extraction (for text-based PDFs) ─────────────────────────────────────
+// Some PDFs (e.g. original Citibank statements) emit one text item per
+// character; touching single characters belong to the same word.
+function isGluedChar(prevStr, it, prevEnd) {
+  return prevStr.length === 1 && it.str.length === 1 && it.x - prevEnd <= 1;
+}
+
 async function tryExtractText(pdf, numPages) {
   let out = '';
   for (let p = 1; p <= numPages; p++) {
@@ -1064,12 +1070,18 @@ async function tryExtractText(pdf, numPages) {
     for (const item of content.items) {
       const y = Math.round(item.transform[5]/2)*2;
       if (!byY[y]) byY[y]=[];
-      byY[y].push({ x: item.transform[4], str: item.str });
+      byY[y].push({ x: item.transform[4], str: item.str, w: item.width || item.str.length * 5 });
     }
     const ys = Object.keys(byY).map(Number).sort((a,b)=>b-a);
     for (const y of ys) {
       const row = byY[y].sort((a,b)=>a.x-b.x);
-      out += row.map(i=>i.str).join(' ').replace(/\s+/g,' ').trim()+'\n';
+      let line = '', prevEnd = null, prevStr = '';
+      for (const it of row) {
+        if (prevEnd != null && !isGluedChar(prevStr, it, prevEnd)) line += ' ';
+        line += it.str;
+        prevEnd = it.x + it.w; prevStr = it.str;
+      }
+      out += line.replace(/\s+/g,' ').trim()+'\n';
     }
     out += '\n';
   }
@@ -1570,14 +1582,14 @@ async function extractLayoutText(pdf) {
     const ys = Object.keys(byY).map(Number).sort((a, b) => b - a);
     for (const y of ys) {
       const rowItems = byY[y].sort((a, b) => a.x - b.x);
-      let line = '', prevEnd = null;
+      let line = '', prevEnd = null, prevStr = '';
       for (const it of rowItems) {
         if (prevEnd != null) {
           const gap = it.x - prevEnd;
-          line += ' '.repeat(gap > 18 ? Math.min(Math.round(gap / 5), 40) : 1);
+          line += ' '.repeat(gap > 18 ? Math.min(Math.round(gap / 5), 40) : isGluedChar(prevStr, it, prevEnd) ? 0 : 1);
         }
         line += it.str;
-        prevEnd = it.x + (it.w || it.str.length * 5);
+        prevEnd = it.x + (it.w || it.str.length * 5); prevStr = it.str;
       }
       text += line + '\n';
     }
