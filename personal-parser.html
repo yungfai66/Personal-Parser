@@ -318,6 +318,7 @@ td.psl-missing{color:var(--muted);}
     <span class="badge" id="b-dbs">DBS/POSB</span>
     <span class="badge" id="b-hsbc">HSBC</span>
     <span class="badge" id="b-citi">Citibank</span>
+    <span class="badge" id="b-citismrt">Citibank SMRT</span>
     <span class="badge" id="b-maybank">Maybank</span>
     <span class="badge" id="b-sc">Standard Chartered</span>
     <span class="badge" id="b-ocbc">OCBC</span>
@@ -620,7 +621,7 @@ const MODE_CONFIG = {
     dropHint: 'one or multiple PDF files · click to browse · 100% local, never sent to the cloud',
     parseBtnText: 'PARSE STATEMENT', resultsTitle: 'Transactions',
     pageTitle: 'Bank <em>Statement</em> Parser',
-    badges: `<span class="badge" id="b-dbs">DBS/POSB</span><span class="badge" id="b-hsbc">HSBC</span><span class="badge" id="b-citi">Citibank</span><span class="badge" id="b-maybank">Maybank</span><span class="badge" id="b-sc">Standard Chartered</span><span class="badge" id="b-ocbc">OCBC</span><span class="badge" id="b-paylah">DBS PayLah!</span><span class="badge" id="b-generic">Generic</span>`
+    badges: `<span class="badge" id="b-dbs">DBS/POSB</span><span class="badge" id="b-hsbc">HSBC</span><span class="badge" id="b-citi">Citibank</span><span class="badge" id="b-citismrt">Citibank SMRT</span><span class="badge" id="b-maybank">Maybank</span><span class="badge" id="b-sc">Standard Chartered</span><span class="badge" id="b-ocbc">OCBC</span><span class="badge" id="b-paylah">DBS PayLah!</span><span class="badge" id="b-generic">Generic</span>`
   },
   bill: {
     dropIcon: '💡', dropLabel: 'Drop your bill PDFs here',
@@ -2907,7 +2908,7 @@ function detectAndParse(text) {
   }
   if (t.includes('CITIBANK') || t.includes('CITI CASH BACK') || t.includes('CITIPHONE') ||
       t.includes('CITI PRESTIGE') || t.includes('ROBINSON ROAD P. O. BOX 355')) {
-    return { bank:'Citibank', transactions:parseCiti(text) };
+    return { bank:t.includes('CITI SMRT') ? 'Citibank SMRT' : 'Citibank', transactions:parseCiti(text) };
   }
   if (t.includes('MAYBANK') || t.includes('TREATS POINTS') || t.includes('1800-MAYBANK') ||
       t.includes('MAYBANK2U') || t.includes('MAYBANK SINGAPORE')) {
@@ -2963,7 +2964,7 @@ function classifyDocument(text) {
 }
 
 function highlightBank(bank) {
-  const map = {'DBS/POSB':'b-dbs','HSBC':'b-hsbc','Citibank':'b-citi','Maybank':'b-maybank','Standard Chartered':'b-sc','OCBC':'b-ocbc','DBS PayLah!':'b-paylah','Generic':'b-generic'};
+  const map = {'DBS/POSB':'b-dbs','HSBC':'b-hsbc','Citibank':'b-citi','Citibank SMRT':'b-citismrt','Maybank':'b-maybank','Standard Chartered':'b-sc','OCBC':'b-ocbc','DBS PayLah!':'b-paylah','Generic':'b-generic'};
   Object.values(map).forEach(id => $(id)?.classList.remove('active'));
   if (bank && map[bank]) $(map[bank])?.classList.add('active');
 }
@@ -3311,6 +3312,11 @@ function normalizeStatementDate(raw) {
     let y = parseInt(m[3],10); if (y<100) y+=2000;
     return `${String(parseInt(m[1],10)).padStart(2,'0')} ${MON_ABBR[mo]} ${y}`;
   }
+  m = raw.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (m) {
+    const mo = MONTHS[m[1].toLowerCase().slice(0,3)];
+    return mo ? `${m[2].padStart(2,'0')} ${MON_ABBR[mo]} ${m[3]}` : '';
+  }
   return '';
 }
 
@@ -3319,7 +3325,7 @@ function normalizeStatementDate(raw) {
 // then the next line (statements that put the label and value in separate,
 // vertically-stacked table cells, e.g. OCBC's header row / data row layout).
 function extractStatementDate(text) {
-  const DATE_TOKEN = /\d{1,2}\s*[\/\-]\s*\d{1,2}\s*[\/\-]\s*\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{2,4}/;
+  const DATE_TOKEN = /\d{1,2}\s*[\/\-]\s*\d{1,2}\s*[\/\-]\s*\d{2,4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{2,4}|[A-Za-z]{3,9}\.?\s+\d{1,2},\s*\d{4}/;
   const lines = text.split('\n');
   for (let i=0; i<lines.length; i++) {
     if (!/STATEMENT\s+DATE/i.test(lines[i])) continue;
